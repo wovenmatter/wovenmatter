@@ -23,20 +23,31 @@ struct ConversationHTMLRenderView: View {
     /// The page has reported its first measured height: until then the frame
     /// shows the loading label at the reserved height, never a blank page.
     @State private var measured = false
+    /// The caption above the frame, decided once, when the page is first
+    /// revealed, and kept through a failure and its retry.
+    @State private var caption: String?
+    @State private var captionDecided = false
     @FocusState private var focusedControl: Control?
 
     private enum Control: Hashable { case zoomOut, resetZoom, zoomIn, expand }
 
     private var title: String { reference.title.isEmpty ? "Visual reply" : reference.title }
 
-    /// The page starts with the frame's own title, so the frame does not
-    /// repeat it: the title row goes and its controls float over the page's
-    /// top corner. It is known when the page first reports, which is when the
-    /// page is revealed, so nothing changes height after that.
-    private var titleRepeated: Bool {
+    /// The reply's title as a caption above the frame, unless the page starts
+    /// with it itself, or there is none: decided from what the inline page had
+    /// reported when it was revealed, and never changed afterwards.
+    private func decideCaption() -> String? {
         let own = reference.title.trimmingCharacters(in: .whitespacesAndNewlines)
-        return !own.isEmpty && reply != nil && measured
-            && pageLead.trimmingCharacters(in: .whitespacesAndNewlines).caseInsensitiveCompare(own) == .orderedSame
+        guard !own.isEmpty else { return nil }
+        return pageLead.trimmingCharacters(in: .whitespacesAndNewlines).caseInsensitiveCompare(own) == .orderedSame ? nil : own
+    }
+
+    /// Shows the page: at the height it reported, or the reserved one when it
+    /// never reports; the caption is settled in the same update.
+    private func reveal() {
+        guard !measured else { return }
+        if !captionDecided { caption = decideCaption(); captionDecided = true }
+        measured = true
     }
 
     init(reference: ConversationHTMLRenderReference) {
@@ -45,53 +56,34 @@ struct ConversationHTMLRenderView: View {
     }
 
     var body: some View {
-        // One frame for loading, loaded and failed, with the title inside it.
-        VStack(alignment: .leading, spacing: 0) {
-            if !titleRepeated {
-                HStack(spacing: ConversationMetrics.entryGap) {
-                    Text(title).lineLimit(1)
-                    Spacer()
-                    frameControls
-                }
-                .modifier(TitleRowStyle())
+        // The frame holds the page and nothing else, loading, loaded or failed;
+        // the title, when the page does not start with it, is a caption above.
+        VStack(alignment: .leading, spacing: ConversationMetrics.labelGap) {
+            if captionDecided, let caption {
+                Text(caption)
+                    .font(.system(size: 11.5, weight: .medium))
+                    .foregroundStyle(WovenPalette.mutedForeground)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
             }
-            if let reply {
-                // The page lays out and measures hidden; it shows, at the height
-                // it reported, in the same update as its first report.
-                ZStack {
-                    web(reply).opacity(measured ? 1 : 0)
-                    if !measured { loadingLabel }
-                }
-                .frame(height: min(20_000, max(80, measured ? height * zoom : height)))
-            } else if let failure {
-                VStack(spacing: ConversationMetrics.rowGap) {
-                    Text(failure).font(.system(size: 13)).foregroundStyle(WovenPalette.mutedForeground)
-                        .multilineTextAlignment(.center)
-                    ConversationTextButton("Retry") { self.failure = nil; Task { await load() } }
-                }
-                .padding(.horizontal, ConversationMetrics.entryGap)
-                .frame(maxWidth: .infinity, minHeight: height)
-            } else {
-                loadingLabel.frame(height: height)
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .overlay(alignment: .topTrailing) {
-            if titleRepeated {
-                frameControls.modifier(TitleRowStyle())
-            }
-        }
-        .clipShape(RoundedRectangle(cornerRadius: ConversationMetrics.blockRadius, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: ConversationMetrics.blockRadius, style: .continuous)
-                .strokeBorder(WovenPalette.foreground.opacity(0.09), lineWidth: 1)
+            frame
         }
         // The width it asked for, when narrower than the column; the hairline is
         // drawn over its edge, so its content lays out at exactly that width.
         .frame(maxWidth: reference.width.map { min(ConversationMetrics.column, CGFloat($0)) } ?? ConversationMetrics.column)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .onHover { hovering = $0 }
         .task(id: reference.digest) { await load() }
+        // `visual:expand`, `visual:close`, `visual:zoom:N` and `visual:fail` act on
+        // every mounted visual reply, as its controls would (debug builds only).
+        .debugCommand("visual:") { action in
+            switch action {
+            case "expand": expanded = true
+            case "close": expanded = false
+            case "fail": failure = "The visual reply stopped. Retry the preview."; reply = nil; measured = false
+            default:
+                if action.hasPrefix("zoom:"), let value = Double(action.dropFirst(5)) { zoom = min(2, max(0.5, value)) }
+            }
+        }
         .sheet(isPresented: $expanded) {
             VStack(spacing: 0) {
                 HStack {
@@ -117,6 +109,42 @@ struct ConversationHTMLRenderView: View {
         } message: { Text($0.absoluteString) }
     }
 
+    private var frame: some View {
+        Group {
+            if let reply {
+                // The page lays out, measures and paints under the loading label;
+                // it shows, at the height it reported, in the same update as its
+                // first report. (Hidden instead, WebKit may not paint it in time.)
+                ZStack {
+                    web(reply)
+                    if !measured { loadingLabel.background(theme.palette.workspace) }
+                }
+                .frame(height: min(20_000, max(80, measured ? height * zoom : height)))
+            } else if let failure {
+                VStack(spacing: ConversationMetrics.rowGap) {
+                    Text(failure).font(.system(size: 13)).foregroundStyle(WovenPalette.mutedForeground)
+                        .multilineTextAlignment(.center)
+                    ConversationTextButton("Retry") { self.failure = nil; Task { await load() } }
+                }
+                .padding(.horizontal, ConversationMetrics.entryGap)
+                .frame(maxWidth: .infinity, minHeight: height)
+            } else {
+                loadingLabel.frame(height: height)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .clipShape(RoundedRectangle(cornerRadius: ConversationMetrics.blockRadius, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: ConversationMetrics.blockRadius, style: .continuous)
+                .strokeBorder(WovenPalette.foreground.opacity(0.09), lineWidth: 1)
+        }
+        // Zoom and expand float in the frame's top corner, over the page.
+        .overlay(alignment: .topTrailing) {
+            frameControls.padding(ConversationMetrics.rowGap)
+        }
+        .onHover { hovering = $0 }
+    }
+
     private var loadingLabel: some View {
         Text("Loading visual reply…")
             .font(.system(size: 13))
@@ -138,19 +166,33 @@ struct ConversationHTMLRenderView: View {
             .accessibilityLabel("Expand visual reply")
             .disabled(reply == nil)
         }
-        .opacity(hovering || zoom != 1 || focusedControl != nil ? 1 : 0.001)
-    }
-
-    private struct TitleRowStyle: ViewModifier {
-        func body(content: Content) -> some View {
-            content
-                .font(.system(size: 11.5, weight: .medium))
-                .foregroundStyle(WovenPalette.mutedForeground)
-                .buttonStyle(.plain)
-                .padding(.horizontal, ConversationMetrics.entryGap)
-                .frame(height: 32)
+        .font(.system(size: 11.5, weight: .medium))
+        .foregroundStyle(WovenPalette.mutedForeground)
+        .buttonStyle(.plain)
+        .padding(.horizontal, ConversationMetrics.rowGap)
+        .frame(height: 24)
+        .background(theme.palette.workspace, in: Capsule())
+        .overlay { Capsule().strokeBorder(WovenPalette.foreground.opacity(0.09), lineWidth: 1) }
+        .opacity(controlsShowing ? 1 : 0.001)
+        .background {
+            #if DEBUG
+            // Debug stills draw the controls over the page's picture while they show.
+            Color.clear.onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { rect in
+                ConversationHTMLControlsSnapshot.frames[reference.digest] = rect
+            }
+            .onChange(of: controlsShowing, initial: true) { _, showing in
+                if showing { ConversationHTMLControlsSnapshot.showing.insert(reference.digest) }
+                else { ConversationHTMLControlsSnapshot.showing.remove(reference.digest) }
+            }
+            .onDisappear {
+                ConversationHTMLControlsSnapshot.showing.remove(reference.digest)
+                ConversationHTMLControlsSnapshot.frames[reference.digest] = nil
+            }
+            #endif
         }
     }
+
+    private var controlsShowing: Bool { hovering || zoom != 1 || focusedControl != nil }
 
     private var expandedMinimumWidth: CGFloat? {
         760
@@ -171,13 +213,26 @@ struct ConversationHTMLRenderView: View {
     }
 
     private func web(_ reply: ConversationVisualReply, fitsHeight: Bool = true) -> some View {
+        // Only the inline page sizes the frame and says how it starts; the
+        // expanded sheet's page lays out at its own width and writes neither.
         ConversationHTMLWebView(html: reply.html, theme: ConversationHTMLTheme.value(theme), zoom: zoom,
-            forwardsConversationScroll: fitsHeight, startsFrame: fitsHeight && titleRepeated,
+            forwardsConversationScroll: fitsHeight, textKey: fitsHeight ? reference.digest : nil,
+            covered: fitsHeight && !measured,
             onHeight: { value in
                 guard fitsHeight, value.isFinite else { return }
                 height = min(20_000, max(80, ceil(value)))
-                if !measured { measured = true }
-            }, onLead: { pageLead = $0 }, onLink: { pendingLink = $0 }, onFailure: { error in
+                reveal()
+            }, onLead: { lead in
+                if fitsHeight { pageLead = lead }
+            }, onLoaded: {
+                // A page that loads but never reports shows at the reserved
+                // height after a second, rather than loading forever.
+                guard fitsHeight else { return }
+                Task { @MainActor in
+                    try? await Task.sleep(for: .seconds(1))
+                    if self.reply != nil { reveal() }
+                }
+            }, onLink: { pendingLink = $0 }, onFailure: { error in
                 failure = error.localizedDescription; self.reply = nil; measured = false
             })
     }
@@ -203,6 +258,38 @@ struct ConversationHTMLRenderView: View {
         } catch { failure = error.localizedDescription }
     }
 }
+
+/// Reads an inline visual reply's text by its digest, while its page is mounted.
+@MainActor enum ConversationVisualReplyText {
+    /// The mounted inline pages, each with the coordinator that registered it.
+    static var readers: [String: (owner: ObjectIdentifier, read: () async -> String?)] = [:]
+
+    static func text(of digest: String) async -> String? {
+        await readers[digest]?.read()
+    }
+
+    /// What the page answered, tidied: trailing spaces off, at most one blank line in a row.
+    static func tidy(_ text: String?) -> String? {
+        guard let text else { return nil }
+        let lines = text.components(separatedBy: "\n").map { line in
+            String(line.reversed().drop(while: { $0.isWhitespace }).reversed())
+        }
+        let result = lines.joined(separator: "\n")
+            .replacingOccurrences(of: "\n{3,}", with: "\n\n", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return result.isEmpty ? nil : result
+    }
+}
+
+#if DEBUG
+/// Where each visual reply's floating controls are, and whether they show, so
+/// a debug still draws them over the page's picture as the window does.
+@MainActor enum ConversationHTMLControlsSnapshot {
+    static var frames: [String: CGRect] = [:]
+    static var showing: Set<String> = []
+    static var shown: [CGRect] { showing.compactMap { frames[$0] } }
+}
+#endif
 
 enum ConversationHTMLTheme {
     static func value(_ theme: WovenTheme) -> [String: Any] {
@@ -248,9 +335,13 @@ private struct ConversationHTMLWebView: ConversationHTMLRepresentable {
     let theme: [String: Any]
     let zoom: Double
     let forwardsConversationScroll: Bool
-    var startsFrame = false
+    /// The inline page's key for reading its text (a visual-only answer's Copy).
+    var textKey: String?
+    /// The loading label covers the page.
+    var covered = false
     let onHeight: (CGFloat) -> Void
     let onLead: (String) -> Void
+    var onLoaded: () -> Void = {}
     let onLink: (URL) -> Void
     let onFailure: (any Error) -> Void
 
@@ -263,8 +354,10 @@ private struct ConversationHTMLWebView: ConversationHTMLRepresentable {
 
     private func update(_ view: WKWebView, coordinator: ConversationHTMLWebCoordinator) {
         (view as? ConversationHTMLNativeWebView)?.forwardsConversationScroll = forwardsConversationScroll
-        (view as? ConversationHTMLNativeWebView)?.startsFrame = startsFrame
         coordinator.onHeight = onHeight; coordinator.onLead = onLead; coordinator.onLink = onLink; coordinator.onFailure = onFailure
+        coordinator.onLoaded = onLoaded
+        (view as? ConversationHTMLNativeWebView)?.isCovered = covered
+        coordinator.register(textKey: textKey, view: view)
         coordinator.apply(html: html, theme: theme, to: view)
         if view.pageZoom != zoom { view.pageZoom = zoom }
     }
@@ -278,9 +371,13 @@ private struct ConversationHTMLWebView: ConversationHTMLRepresentable {
     var onLead: (String) -> Void = { _ in }
     var onLink: (URL) -> Void = { _ in }
     var onReady: () -> Void = {}
+    var onLoaded: () -> Void = {}
     var onFailure: (any Error) -> Void = { _ in }
     var consoleMessages: [[String: String]] = []
     private var consoleBytes = 0
+    /// The inline page's digest, while this page answers Copy for it.
+    private var textKey: String?
+    private var textWaiter: CheckedContinuation<String?, Never>?
 
     func makeWebView(forwardsConversationScroll: Bool = false) -> WKWebView {
         let configuration = WKWebViewConfiguration()
@@ -304,10 +401,48 @@ private struct ConversationHTMLWebView: ConversationHTMLRepresentable {
         } else if changed { updateTheme(view) }
     }
 
+    func register(textKey key: String?, view: WKWebView) {
+        guard key != textKey else { return }
+        unregisterText()
+        textKey = key
+        guard let key else { return }
+        ConversationVisualReplyText.readers[key] = (ObjectIdentifier(self), { [weak self, weak view] in
+            guard let self, let view else { return nil }
+            return await self.readText(view)
+        })
+    }
+
+    private func unregisterText() {
+        if let key = textKey, ConversationVisualReplyText.readers[key]?.owner == ObjectIdentifier(self) {
+            ConversationVisualReplyText.readers[key] = nil
+        }
+        textKey = nil
+    }
+
+    /// The page's text as it shows, read inside its frame; nil when it does not
+    /// answer within a second, or a read is already waiting.
+    func readText(_ view: WKWebView) async -> String? {
+        guard textWaiter == nil else { return nil }
+        let text = await withCheckedContinuation { (waiter: CheckedContinuation<String?, Never>) in
+            textWaiter = waiter
+            view.evaluateJavaScript("window.wovenReadText?.()", completionHandler: nil)
+            Task { @MainActor [weak self] in
+                try? await Task.sleep(for: .seconds(1))
+                self?.answerText(nil)
+            }
+        }
+        return ConversationVisualReplyText.tidy(text)
+    }
+
+    private func answerText(_ text: String?) {
+        textWaiter?.resume(returning: text); textWaiter = nil
+    }
+
     func stop(_ view: WKWebView) {
+        answerText(nil); unregisterText()
         view.stopLoading(); view.navigationDelegate = nil
         view.configuration.userContentController.removeScriptMessageHandler(forName: "wovenHTML")
-        onHeight = { _ in }; onLead = { _ in }; onLink = { _ in }; onReady = {}; onFailure = { _ in }
+        onHeight = { _ in }; onLead = { _ in }; onLink = { _ in }; onReady = {}; onLoaded = {}; onFailure = { _ in }
         html = nil; themeJSON = nil; consoleMessages.removeAll(); consoleBytes = 0
     }
 
@@ -323,8 +458,11 @@ private struct ConversationHTMLWebView: ConversationHTMLRepresentable {
             if let view = message.webView { updateTheme(view) }
             onReady()
         case "size":
-            if let value = body["height"] as? Double, value.isFinite { onHeight(CGFloat(min(20_000, max(80, value)))) }
+            // The lead first: the first height reveals the page, and settles its caption from it.
             onLead(String((body["lead"] as? String ?? "").prefix(200)))
+            if let value = body["height"] as? Double, value.isFinite { onHeight(CGFloat(min(20_000, max(80, value)))) }
+        case "text":
+            answerText((body["text"] as? String).map { String($0.prefix(200_000)) })
         case "link":
             if let raw = body["url"] as? String, let url = URL(string: raw), ["http", "https"].contains(url.scheme?.lowercased() ?? "") { onLink(url) }
         case "console":
@@ -346,6 +484,7 @@ private struct ConversationHTMLWebView: ConversationHTMLRepresentable {
               url.absoluteString == "about:blank" || url.absoluteString == "about:srcdoc" else { return .cancel }
         return .allow
     }
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) { onLoaded() }
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: any Error) { onFailure(error) }
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: any Error) { onFailure(error) }
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
@@ -358,9 +497,9 @@ private struct ConversationHTMLWebView: ConversationHTMLRepresentable {
 /// retain WebKit's normal handling; links, selection and magnification do too.
 final class ConversationHTMLNativeWebView: WKWebView {
     var forwardsConversationScroll = false
-    /// No title row above it: the page meets the frame's top edge (the debug
-    /// still clips it to the frame's rounded top too).
-    var startsFrame = false
+    /// The frame's loading label covers the page (debug stills leave it out).
+    var isCovered = false
+
     private var scrollGesture = ConversationHTMLScrollGesture()
 
     override func scrollWheel(with event: NSEvent) {

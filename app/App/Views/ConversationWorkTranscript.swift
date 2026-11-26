@@ -112,8 +112,14 @@ struct ConversationWorkTranscript: View {
             timeline.entries.filter { Self.draws($0, isRunning: isRunning) }, isRunning: isRunning)
         let foldable = unfolded.contains { entry in
             if entry.staysOutsideFold { return false }
-            if case .activity(let activity) = entry.content, activity.kind == .thought,
-               !activity.workTimelineThoughtHasText { return false }
+            if case .activity(let activity) = entry.content, activity.kind == .thought {
+                // A live thought hides something only once it shows a title or
+                // a line; a bare "Thinking" folds nothing away.
+                if isRunning, activity.workTimelineShowsProgress, entry.id == timeline.entries.last?.id, !hasFollowingResponse {
+                    return ConversationThinkingBlock.liveTitle(of: activity) != nil || ConversationThinkingBlock.liveShowsText(activity)
+                }
+                return activity.workTimelineThoughtHasText
+            }
             return true
         }
         let workExpanded = workDisclosure
@@ -121,14 +127,17 @@ struct ConversationWorkTranscript: View {
         let (entries, reasoning) = folded
             ? Self.carryThoughts(timeline.entriesOutsideFold.filter { Self.draws($0, isRunning: isRunning) }, isRunning: isRunning)
             : (unfolded, unfoldedReasoning)
-        // A folded turn shows only the dots below.
-        let showsThinking = isRunning && !hasFollowingResponse && !folded && timeline.needsThinkingIndicator
+        // A folded turn shows only the dots below. Until something is drawn,
+        // and after anything that does not show progress itself, a Thinking
+        // row holds the place, with the dots under it.
+        let showsThinking = isRunning && !hasFollowingResponse && !folded && Self.needsThinking(entries)
         let showsWork = !entries.isEmpty || showsThinking
         // The rule sits over work the header folds; what stays outside the
         // fold (a visual reply, a plan) needs none.
         let showsRule = foldable && !folded
         // Thought rows that are all that stands between a visual reply and the
-        // reply text sit close to both, so the chart and its words stay one answer.
+        // reply text keep a section from each: never close enough to the card
+        // to read as its caption.
         let thoughtsCloseVisual = hasFollowingResponse && Self.thoughtsCloseVisual(entries)
         VStack(alignment: .leading, spacing: 0) {
             let headerStyle = content.failureMessage != nil ? WovenPalette.danger : WovenPalette.mutedForeground
@@ -175,8 +184,7 @@ struct ConversationWorkTranscript: View {
                             ForEach(Array(entries.enumerated()), id: \.element.id) { index, entry in
                                 self.entry(entry, tailID: tailID, isRunning: isRunning, reasoning: reasoning[entry.id])
                                     .padding(.top, Self.gap(before: entry, after: index > 0 ? entries[index - 1] : nil,
-                                                            next: index + 1 < entries.count ? entries[index + 1] : nil,
-                                                            thoughtsCloseVisual: thoughtsCloseVisual))
+                                                            next: index + 1 < entries.count ? entries[index + 1] : nil))
                             }
                         }
                         .transition(reduceMotion ? .identity : .opacity)
@@ -199,8 +207,13 @@ struct ConversationWorkTranscript: View {
             // A response below takes the dots under its text instead. They
             // start where the text above them starts.
             if isRunning && !hasFollowingResponse {
+                // A label gap under what is above them; a live trace's last line
+                // box already carries its line spacing below the glyphs.
+                let underTrace = !showsThinking && entries.last.map { Self.isLiveTrace($0, tailID: timeline.entries.last?.id) } == true
                 ConversationRunningDots()
-                    .padding(.top, showsWork ? ConversationMetrics.labelGap : ConversationMetrics.entryGap)
+                    .padding(.top, !showsWork ? ConversationMetrics.entryGap
+                        : underTrace ? ConversationMetrics.labelGap - ConversationMetrics.Prose.lineSpacing
+                        : ConversationMetrics.labelGap)
                     .padding(.leading, showsWork ? ConversationMetrics.textInset : 0)
             }
         }
@@ -209,7 +222,7 @@ struct ConversationWorkTranscript: View {
         .padding(.bottom, !hasFollowingResponse ? 0
             : !showsWork ? (replyStartsWithBox ? ConversationMetrics.sectionGap : ConversationMetrics.entryGap)
             : entries.last.map(Self.isVisualReply) == true ? ConversationMetrics.sectionGap
-            : thoughtsCloseVisual ? ConversationMetrics.entryGap
+            : thoughtsCloseVisual ? ConversationMetrics.sectionGap
             : ConversationMetrics.workEndGap)
         .frame(maxWidth: ConversationMetrics.column, alignment: .leading)
         // Without a session folder, the folder of the turn's first path, so
@@ -249,18 +262,42 @@ struct ConversationWorkTranscript: View {
     }
 
     /// A unit of work is [a titled thought,] a sentence of commentary, and the
-    /// tools it introduces: a section above its first row, a label gap inside.
-    /// Icon rows (tools, groups, thoughts) sit a row gap apart.
+    /// tools it introduces: a section above a sentence that starts one, a label
+    /// gap inside. Icon rows (tools, groups, thoughts) sit a row gap apart. A
+    /// row's gap depends only on the row before it, so a row that replaces a
+    /// live "Thinking" lands exactly where it was.
     private static func gap(before entry: ConversationWorkTimelineEntry, after previous: ConversationWorkTimelineEntry?,
-                            next: ConversationWorkTimelineEntry?, thoughtsCloseVisual: Bool) -> CGFloat {
+                            next: ConversationWorkTimelineEntry?) -> CGFloat {
         // The first row's gap is the section under the header.
         guard let previous else { return 0 }
-        if thoughtsCloseVisual, isVisualReply(previous), isThought(entry) { return ConversationMetrics.rowGap }
         if isVisualReply(entry) || isVisualReply(previous) { return ConversationMetrics.sectionGap }
         if case .commentary = previous.content, isTool(entry) { return ConversationMetrics.labelGap }
+        // A thought, drawn as a row or as its one-line title, keeps a row's gap
+        // (it took the place of "Thinking"); the sentence after it stays with it.
         if case .commentary = entry.content { return isThought(previous) ? ConversationMetrics.labelGap : ConversationMetrics.sectionGap }
-        if isThought(entry), case .commentary? = next?.content { return ConversationMetrics.sectionGap }
         return ConversationMetrics.rowGap
+    }
+
+    /// A live thought at the tail showing its trace window.
+    private static func isLiveTrace(_ entry: ConversationWorkTimelineEntry, tailID: String?) -> Bool {
+        guard entry.id == tailID, case .activity(let activity) = entry.content, activity.kind == .thought,
+              activity.workTimelineShowsProgress else { return false }
+        return ConversationThinkingBlock.liveShowsText(activity)
+    }
+
+    /// Whether the rows drawn need a Thinking row under them: none drawn yet,
+    /// or the last is a settled group or row, and nothing shows progress.
+    private static func needsThinking(_ entries: [ConversationWorkTimelineEntry]) -> Bool {
+        if entries.contains(where: { entry in
+            switch entry.content {
+            case .group(let group): group.hasActiveActivity
+            case .activity(let activity): activity.workTimelineShowsProgress
+            case .commentary: false
+            }
+        }) { return false }
+        guard let last = entries.last else { return true }
+        if case .activity(let activity) = last.content, activity.kind == .thought { return false }
+        return true
     }
 
     /// The entries end with thought rows right after a visual reply.
@@ -457,15 +494,19 @@ struct ConversationThinkingLabel: View {
     let text: String
     /// A record (an approval) is not thinking, so it has its own glyph.
     var systemImage = "brain"
+    /// A record reads as the tool row it stands for; thinking in reasoning's
+    /// ink, the quietest in the lane, and regular weight.
+    var isRecord = false
 
     var body: some View {
         HStack(spacing: ConversationMetrics.iconGap) {
             Image(systemName: systemImage)
                 .font(.system(size: 12, weight: .medium))
                 .frame(width: ConversationMetrics.iconColumn)
-            Text(text).font(.system(size: 13.5))
+            Text(text).font(.system(size: 13.5, weight: isRecord ? .medium : .regular))
         }
-        .foregroundStyle(WovenPalette.mutedForeground)
+        .foregroundStyle(isRecord ? WovenPalette.foreground.opacity(0.72)
+            : WovenPalette.foreground.opacity(ConversationResponse.Style.reasoning.inkOpacity))
         .accessibilityElement(children: .combine)
     }
 }
@@ -476,13 +517,9 @@ struct ConversationThinkingLabel: View {
 /// thought that is only a title is that row, and a record of fields (an
 /// approval) is summed up in it.
 private struct ConversationThinkingBlock: View {
-    /// Exactly three lines of reasoning text, so a trace that follows its end
-    /// stops on a line's top rather than cutting one.
-    private static let liveHeight: CGFloat = {
-        let font = NSFont.systemFont(ofSize: 15 * ConversationResponse.Style.reasoning.scale)
-        let line = NSLayoutManager().defaultLineHeight(for: font) + ConversationMetrics.Prose.lineSpacing
-        return ceil(3 * line - ConversationMetrics.Prose.lineSpacing)
-    }()
+    /// Exactly three plain lines: every line box is one pitch, so a window
+    /// three pitches tall, kept at the text's end, shows three whole lines.
+    static var liveHeight: CGFloat { 3 * ConversationResponse.Style.plainLinePitch }
 
     let activity: AgentRunActivity
     let runID: String
@@ -512,21 +549,25 @@ private struct ConversationThinkingBlock: View {
     @ViewBuilder
     private func settledRow(_ summary: Summary) -> some View {
         let glyph = summary.isRecord ? "checkmark.shield" : "brain"
-        if summary.isComplete {
-            // A title with nothing behind it.
-            ConversationThinkingLabel(text: summary.label, systemImage: glyph).lineLimit(1)
+        if summary.isComplete, summary.isRecord {
+            ConversationThinkingLabel(text: summary.label, systemImage: glyph, isRecord: true).lineLimit(1)
+        } else if summary.isComplete {
+            // A title with nothing behind it says one thing: a line of
+            // commentary, with nothing to open.
+            ConversationResponse(content: summary.label, isStreaming: false, showsCopyButton: false, style: .commentary)
+                .padding(.leading, ConversationMetrics.textInset)
         } else {
-            disclosure(label: summary.label, systemImage: glyph)
+            disclosure(label: summary.label, systemImage: glyph, isRecord: summary.isRecord)
         }
     }
 
-    private func disclosure(label: String, systemImage: String) -> some View {
+    private func disclosure(label: String, systemImage: String, isRecord: Bool) -> some View {
         let expanded = conversationDisclosure(transcriptState, runID: runID, itemID: "thinking:" + activity.id,
             keepsRunningTurnOpen: runStatus == .running, local: $localExpanded, interaction: transcriptInteraction)
         return VStack(alignment: .leading, spacing: 0) {
             Button { expanded.wrappedValue.toggle() } label: {
                 HStack(spacing: ConversationMetrics.labelGap) {
-                    ConversationThinkingLabel(text: label, systemImage: systemImage)
+                    ConversationThinkingLabel(text: label, systemImage: systemImage, isRecord: isRecord)
                         .lineLimit(1)
                     Image(systemName: "chevron.right")
                         .font(.system(size: 10, weight: .semibold))
@@ -564,13 +605,17 @@ private struct ConversationThinkingBlock: View {
     }
 
     /// The live reasoning's title so far: the provider's, or its leading bold heading.
-    private var liveTitle: String? {
+    private var liveTitle: String? { Self.liveTitle(of: activity) }
+
+    static func liveTitle(of activity: AgentRunActivity) -> String? {
         activity.workTimelineThoughtTitle
             ?? AgentRunActivity.leadingBoldHeading(AssistantStreamingText.readyPrefix(of: activity.content ?? activity.detail ?? ""))
     }
 
     /// The live trace has a line to show beyond its title.
-    private var hasShownText: Bool {
+    private var hasShownText: Bool { Self.liveShowsText(activity) }
+
+    static func liveShowsText(_ activity: AgentRunActivity) -> Bool {
         ConversationReasoningText.shown(AssistantStreamingText.readyPrefix(of: activity.content ?? activity.detail ?? ""))
             .workTimelineNonempty != nil
     }
@@ -635,12 +680,9 @@ private struct ConversationReasonedCommentary: View {
         let expanded = conversationDisclosure(transcriptState, runID: runID, itemID: "thinking:" + thought.id,
             keepsRunningTurnOpen: runStatus == .running, local: $localExpanded, interaction: transcriptInteraction)
         VStack(alignment: .leading, spacing: 0) {
-            HStack(alignment: .top, spacing: ConversationMetrics.iconGap) {
-                Image(systemName: "brain")
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(WovenPalette.mutedForeground)
-                    .frame(width: ConversationMetrics.iconColumn, height: 16)
-                    .accessibilityHidden(true)
+            // Drawn as the commentary it is, at the lane's text inset; the
+            // chevron after the sentence opens the reasoning that led to it.
+            HStack(alignment: .top, spacing: 0) {
                 ConversationResponse(
                     content: commentary.content ?? "",
                     isStreaming: false,
@@ -661,6 +703,7 @@ private struct ConversationReasonedCommentary: View {
                         .accessibilityValue(expanded.wrappedValue ? "Expanded" : "Collapsed"))
                 )
             }
+            .padding(.leading, ConversationMetrics.textInset)
             if expanded.wrappedValue {
                 ConversationBoundedWorkList(
                     group: ConversationWorkGroup(id: thought.id, activities: [thought], endsTimeline: false),
@@ -722,9 +765,11 @@ private struct ConversationWorkGroupRow: View {
             VStack(alignment: .leading, spacing: 0) {
                 Button { expanded.wrappedValue.toggle() } label: {
                     HStack(spacing: ConversationMetrics.iconGap) {
+                        // A failure marks the icon, as on a single row; the label keeps its ink.
                         Image(systemName: group.hasFailure ? "exclamationmark.triangle"
                             : group.action?.systemImage ?? "wrench.and.screwdriver")
                             .font(.system(size: 12, weight: .medium))
+                            .foregroundStyle(group.hasFailure ? AnyShapeStyle(Color.red.opacity(0.8)) : AnyShapeStyle(.foreground))
                             .frame(width: ConversationMetrics.iconColumn)
                         // The sentence when it fits on one line, else the
                         // compact form; never a sentence cut short.
@@ -740,8 +785,7 @@ private struct ConversationWorkGroupRow: View {
                             .accessibilityHidden(true)
                         Spacer(minLength: 0)
                     }
-                    .foregroundStyle(group.hasFailure ? Color.red.opacity(0.8)
-                        : WovenPalette.foreground.opacity(0.72))
+                    .foregroundStyle(WovenPalette.foreground.opacity(0.72))
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(ConversationElapsedButtonStyle())
@@ -825,7 +869,10 @@ private struct ConversationBoundedWorkList: View {
                 Color.black
             }
         }
-        .defaultScrollAnchor(.top, for: .initialOffset)
+        // A live trace opens at its end and keeps its end in the same layout
+        // as it grows, so the window always ends on a whole line.
+        .defaultScrollAnchor(followsAppends ? .bottom : .top, for: .initialOffset)
+        .defaultScrollAnchor(followsAppends ? .bottom : nil, for: .sizeChanges)
         .scrollPosition($scrollPosition)
         .onScrollGeometryChange(for: ConversationWorkScrollGeometry.self) { geometry in
             .init(contentHeight: geometry.contentSize.height, offset: max(0, geometry.contentOffset.y),
@@ -978,18 +1025,16 @@ private struct ConversationActivityRow: View {
             HStack(alignment: .firstTextBaseline, spacing: ConversationMetrics.iconGap) {
                 activityIcon
                 VStack(alignment: .leading, spacing: ConversationMetrics.hair) {
-                    // One line, cut at its end, no wider than a label reads
-                    // well, so the chevron stays right after it; the full text
-                    // is in the details.
+                    // One line across the row, cut at its end, with the chevron
+                    // right after it; the full text is in the details.
                     HStack(alignment: .firstTextBaseline, spacing: ConversationMetrics.labelGap) {
                         Text(primaryLabel)
                             .font(.system(size: 13.5, weight: .medium))
                             .foregroundStyle(WovenPalette.foreground.opacity(0.72))
                             .lineLimit(1)
                             .truncationMode(.tail)
-                        if let expanded { chevron(expanded) }
+                        if let expanded { chevron(expanded).layoutPriority(1) }
                     }
-                    .frame(maxWidth: Self.labelWidth + ConversationMetrics.labelGap + Self.chevronWidth, alignment: .leading)
                     if let secondaryLabel {
                         Text(secondaryLabel)
                             .font(.system(size: 12.5))
@@ -1003,10 +1048,6 @@ private struct ConversationActivityRow: View {
             .contentShape(Rectangle())
         }
     }
-
-    /// The widest a work row's label grows before it is cut.
-    private static let labelWidth: CGFloat = 480
-    private static let chevronWidth: CGFloat = 10
 
     private func chevron(_ expanded: Bool) -> some View {
         Image(systemName: "chevron.right")

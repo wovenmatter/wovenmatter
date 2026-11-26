@@ -459,9 +459,12 @@ when an intentional design change is accepted.
   never adds or removes height. A unit of work is a sentence of commentary and
   the tools it introduces, a section above it and a label gap inside; an
   untitled thought that led to the sentence has no row of its own: the
-  sentence carries the brain and a chevron that opens the reasoning. Anywhere
-  else a thought keeps its row; none is ever lost. Tool rows are one
-  line, truncated in the middle, with the chevron right after the label; the
+  sentence stays commentary, at the lane's text inset with no icon, and a
+  chevron after it opens the reasoning. A thought that is only its title is a
+  line of commentary with nothing to open; one that opens keeps the brain and a
+  chevron, in reasoning's ink and regular weight. Anywhere else a thought keeps
+  its row; none is ever lost. Tool rows are one line across the row, cut at the
+  end, with the chevron right after the label; the
   full text is in their details, which open at the rows' text inset and wrap
   rather than scroll sideways. Every harness's tool rows use one grammar: a
   verb and a short object (Read docs/README.md, Listed sample, Searched for

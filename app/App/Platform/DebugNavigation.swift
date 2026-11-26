@@ -94,6 +94,9 @@ enum DebugNavigationSignal {
             let request = text.trimmingCharacters(in: .whitespacesAndNewlines)
             if request.hasPrefix("web-snapshot:") {
                 snapshotWebViews(to: URL(fileURLWithPath: String(request.dropFirst(13))))
+            } else if request.hasPrefix("snapshot-sheet:") {
+                // The sheet over the main window, such as an expanded visual reply.
+                snapshotWindow(to: URL(fileURLWithPath: String(request.dropFirst(15))), chatOnly: false, sheet: true)
             } else if request.hasPrefix("snapshot:") {
                 snapshotWindow(to: URL(fileURLWithPath: String(request.dropFirst(9))), chatOnly: false)
             } else if request.hasPrefix("snapshot-chat:") {
@@ -107,6 +110,7 @@ enum DebugNavigationSignal {
                 guard let points = Double(request.dropFirst(11)),
                       let scrollView = scrollViews.max(by: { $0.visibleRect.height < $1.visibleRect.height }) else { return }
                 let clip = scrollView.contentView
+                ConversationReaderInput.note()
                 var origin = clip.bounds.origin
                 origin.y += clip.isFlipped ? points : -points
                 clip.scroll(to: clip.constrainBoundsRect(NSRect(origin: origin, size: clip.bounds.size)).origin)
@@ -144,12 +148,20 @@ enum DebugNavigationSignal {
     /// drawn by the app itself, so it needs no screen. Web views draw blank
     /// that way, so each visible one's own snapshot is drawn in where it
     /// sits. The file is written last, in one piece, so a script can wait for it.
-    private static func snapshotWindow(to path: URL, chatOnly: Bool) {
-        guard let view = mainWindow?.contentView else { return }
+    private static func snapshotWindow(to path: URL, chatOnly: Bool, sheet: Bool = false) {
+        guard let view = (sheet ? mainWindow?.attachedSheet : mainWindow)?.contentView else { return }
         view.layoutSubtreeIfNeeded()
         view.displayIfNeeded()
         guard let bitmap = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return }
         view.cacheDisplay(in: view.bounds, to: bitmap)
+        // The window as drawn, kept apart for redrawing showing controls over
+        // the pages. (Never the composite's own image: asked for before the pages
+        // are drawn in, it would hand that earlier image back for the file.)
+        let window: CGImage? = ConversationHTMLControlsSnapshot.shown.isEmpty ? nil : {
+            guard let copy = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return nil }
+            view.cacheDisplay(in: view.bounds, to: copy)
+            return copy.cgImage
+        }()
         func webViews(in view: NSView) -> [WKWebView] {
             (view as? WKWebView).map { [$0] } ?? view.subviews.flatMap(webViews)
         }
@@ -164,25 +176,26 @@ enum DebugNavigationSignal {
             }
             return alpha > 0.01
         }
-        let shown = webViews(in: view).filter { !$0.isHiddenOrHasHiddenAncestor && !$0.visibleRect.isEmpty && shows($0) }
-        var pieces: [(image: NSImage, frame: NSRect, whole: NSRect, framed: Bool, startsFrame: Bool)] = []
+        let shown = webViews(in: view).filter { webView in
+            !webView.isHiddenOrHasHiddenAncestor && !webView.visibleRect.isEmpty && shows(webView)
+                && (webView as? ConversationHTMLNativeWebView)?.isCovered != true
+        }
+        var pieces: [(image: NSImage, frame: NSRect, whole: NSRect, framed: Bool)] = []
         // A web view whose picture never came is said beside the still,
         // never passed off as an empty frame.
         var missing: [String] = []
         let group = DispatchGroup()
         for webView in shown {
-            let configuration = WKSnapshotConfiguration()
-            configuration.rect = webView.visibleRect
+            // The whole page, drawn where it sits and cut to what shows.
             let frame = view.convert(webView.visibleRect, from: webView)
             let whole = view.convert(webView.bounds, from: webView)
             // A visual reply sits at the bottom of its rounded, stroked frame.
             let framed = webView is ConversationHTMLNativeWebView
-            let startsFrame = (webView as? ConversationHTMLNativeWebView)?.startsFrame == true
             group.enter()
             func take(_ attempt: Int) {
-                webView.takeSnapshot(with: configuration) { image, error in
+                webView.takeSnapshot(with: nil) { image, error in
                     if let image {
-                        pieces.append((image, frame, whole, framed, startsFrame))
+                        pieces.append((image, frame, whole, framed))
                         group.leave()
                     } else if attempt < 3 {
                         DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { take(attempt + 1) }
@@ -205,27 +218,38 @@ enum DebugNavigationSignal {
                 func unflipped(_ rect: NSRect) -> NSRect {
                     view.isFlipped ? NSRect(x: rect.minX, y: view.bounds.height - rect.maxY, width: rect.width, height: rect.height) : rect
                 }
+                // What the window drew over the pages (their floating controls, while
+                // they show) is drawn again over the pages' pictures.
+                let scale = CGFloat(bitmap.pixelsWide) / view.bounds.width
                 // Web content sits in a transcript, under that transcript's faded edges.
                 for piece in pieces {
                     let cg = context.cgContext
                     cg.beginTransparencyLayer(auxiliaryInfo: nil)
                     NSGraphicsContext.saveGraphicsState()
                     if piece.framed {
-                        // Only what the frame shows: inside its stroke, with its
-                        // rounded bottom corners, and its top ones too when no
-                        // title row sits above the page.
-                        let whole = unflipped(piece.whole)
+                        // Only what the frame shows: inside its stroke on every
+                        // side, with its rounded corners.
+                        let whole = unflipped(piece.whole).insetBy(dx: 1, dy: 1)
                         let radius = ConversationMetrics.blockRadius - 1
-                        let top: CGFloat = piece.startsFrame ? -1 : radius
-                        NSBezierPath(roundedRect: NSRect(x: whole.minX + 1, y: whole.minY + 1, width: whole.width - 2,
-                                                         height: whole.height + top), xRadius: radius, yRadius: radius).addClip()
+                        NSBezierPath(roundedRect: whole, xRadius: radius, yRadius: radius).addClip()
                     }
-                    piece.image.draw(in: unflipped(piece.frame))
+                    NSBezierPath(rect: unflipped(piece.frame)).addClip()
+                    piece.image.draw(in: unflipped(piece.whole))
                     NSGraphicsContext.restoreGraphicsState()
                     if let edges = ConversationEdgeSnapshot.containing(piece.frame) {
                         fade(cg, to: edges, height: view.bounds.height, width: view.bounds.width)
                     }
                     cg.endTransparencyLayer()
+                }
+                if let window {
+                    for rect in ConversationHTMLControlsSnapshot.shown {
+                        let target = unflipped(rect)
+                        let source = CGRect(x: rect.minX * scale, y: rect.minY * scale,
+                                            width: rect.width * scale, height: rect.height * scale).integral
+                        if let piece = window.cropping(to: source) {
+                            context.cgContext.draw(piece, in: target.integral)
+                        }
+                    }
                 }
                 NSGraphicsContext.restoreGraphicsState()
             }

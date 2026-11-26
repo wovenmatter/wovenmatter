@@ -290,6 +290,7 @@ struct CloudConversation: View {
                     scrolled(to: offset)
                 }
                 .onChange(of: conversation?.id, initial: true) { _, conversationID in
+                    ConversationReaderInput.start()
                     conversationChanged(to: conversationID)
                 }
                 .onChange(of: transcriptIdentity, initial: true) { _, identity in measured.shown = identity }
@@ -740,12 +741,15 @@ struct CloudConversation: View {
         if resized { measured.resizes += 1 }
         // The view moving with no scroll phase is the reader (keyboard, wheel
         // without phases, accessibility): when nothing resized, any move away
-        // from the end or onto it; when something resized too, a move that
-        // left the end further away, which keeping the bottom never does (it
-        // moves the view with the end, or, when it cannot, not at all).
+        // from the end or onto it. When something resized in the same update,
+        // only a move the reader just made by wheel or key counts: one that
+        // left the end further away (keeping the bottom never does), or one
+        // that reached the end; a layout on its own never changes following.
         let movedAway = after.distance > max(before.distance, Self.liveEdgeTolerance)
+        let arrived = after.distance <= Self.liveEdgeTolerance && before.distance > Self.liveEdgeTolerance
         if !isUserScrolling, !isPrependingHistory, after.offset != before.offset,
-           resized ? movedAway : (after.distance > before.distance || after.distance <= Self.liveEdgeTolerance) {
+           resized ? ConversationReaderInput.isRecent && (movedAway || arrived)
+                   : (after.distance > before.distance || after.distance <= Self.liveEdgeTolerance) {
             readerMoved(to: after)
         }
         // Back at the live edge, the bottom holds instead.
@@ -1006,6 +1010,13 @@ struct MessageRow: View {
                         showsRunningDots: run?.status == .running && hasResponseText,
                         fileRow: ConversationFileRow(messageID: message.libraryItemID, resolveFile: resolveFile)
                     )
+                } else if !hasResponseText, let run, run.status != .running,
+                          let digest = activities.last(where: { $0.activity.htmlRender != nil })?.activity.htmlRender?.digest {
+                    // An answer that is only a visual reply can be copied too:
+                    // the page's readable text, from the same action row.
+                    ConversationVisualReplyCopyButton(digest: digest)
+                        .frame(minHeight: ConversationMetrics.actionRowHeight)
+                        .padding(.top, ConversationMetrics.rowGap)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -1185,3 +1196,62 @@ private struct TranscriptIdentity: Hashable {
     let hasLoaded: Bool
 }
 
+/// Copy for an answer that is only a visual reply: the page's readable text,
+/// with the reply's own quiet Copy look.
+private struct ConversationVisualReplyCopyButton: View {
+    let digest: String
+    @State private var copied = false
+
+    var body: some View {
+        Button(action: copy) {
+            Image(systemName: copied ? "checkmark" : "doc.on.doc")
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(WovenPalette.foreground.opacity(0.72))
+                .frame(width: ConversationMetrics.actionRowHeight, height: ConversationMetrics.actionRowHeight)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(WovenIconButtonStyle())
+        // The glyph lines up with the text edge; its hover target hangs left of it.
+        .padding(.leading, -(ConversationMetrics.actionRowHeight - 13) / 2)
+        .help("Copy complete response")
+        .accessibilityLabel(copied ? "Response copied" : "Copy response")
+        // `copy-visual` presses it (debug builds only).
+        .debugRequest("copy-visual", copy)
+    }
+
+    private func copy() {
+        Task { @MainActor in
+            guard let text = await ConversationVisualReplyText.text(of: digest) else { return }
+            NSPasteboard.general.clearContents()
+            copied = NSPasteboard.general.setString(text, forType: .string)
+        }
+    }
+}
+
+/// When the reader last scrolled by wheel or key: a transcript move in the
+/// same moment is theirs, even when the content resized in the same update.
+@MainActor enum ConversationReaderInput {
+    private static var last = Date.distantPast
+    private static var monitor: Any?
+
+    /// A wheel or navigation key within the last half second.
+    static var isRecent: Bool { Date().timeIntervalSince(last) < 0.5 }
+
+    static func note() { last = Date() }
+
+    /// Watches the app's own wheel and navigation-key events, once. A key
+    /// counts only outside text editing: a space typed in the composer is
+    /// not the reader scrolling.
+    static func start() {
+        guard monitor == nil else { return }
+        let keys: Set<UInt16> = [115, 116, 119, 121, 125, 126, 49]   // home, page up, end, page down, down, up, space
+        monitor = NSEvent.addLocalMonitorForEvents(matching: [.scrollWheel, .keyDown]) { event in
+            if event.type == .scrollWheel {
+                note()
+            } else if keys.contains(event.keyCode), !(NSApp.keyWindow?.firstResponder is NSText) {
+                note()
+            }
+            return event
+        }
+    }
+}
