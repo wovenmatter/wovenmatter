@@ -1027,6 +1027,7 @@ struct MessageRow: View {
                     ConversationResponse(
                         content: reply,
                         isStreaming: isStreaming,
+                        isCut: !isStreaming && (run?.status == .cancelled || run?.status == .failed),
                         // The running turn's dots, under the text it is writing.
                         showsRunningDots: run?.status == .running && hasResponseText,
                         fileRow: ConversationFileRow(messageID: message.libraryItemID, resolveFile: resolveFile)

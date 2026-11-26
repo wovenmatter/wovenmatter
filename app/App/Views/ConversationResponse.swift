@@ -40,6 +40,9 @@ struct ConversationResponse: View {
 
     let content: String
     let isStreaming: Bool
+    /// The reply was cut off (its turn stopped or failed): its unfinished
+    /// last line shows as what it was becoming, never as raw Markdown.
+    var isCut = false
     var showsCopyButton = true
     /// While the turn runs, its dots hold the row Copy takes once it ends.
     var showsRunningDots = false
@@ -60,8 +63,10 @@ struct ConversationResponse: View {
     @State private var placed: ConversationPlacedText?
 
     var body: some View {
-        // Reasoning shows without the provider's own metadata lines.
-        let shown = style == .reasoning || style == .plainReasoning ? ConversationResponseAttributedText.withoutProviderMarkup(content) : content
+        // Reasoning shows without the provider's own metadata lines; a cut
+        // reply without its unfinished table start or open inline markup.
+        let shown = style == .reasoning || style == .plainReasoning ? ConversationResponseAttributedText.withoutProviderMarkup(content)
+            : isCut ? ConversationMarkdownDocument.finishingCutText(content) : content
         let accessory = trailingAccessory.flatMap { _ in placed.map(accessoryPlacement) }
         // The files the reply refers to, as chips under it once it settles; a
         // link in the text to one of them opens it as its chip does.

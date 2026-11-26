@@ -147,6 +147,38 @@ struct ConversationMarkdownDocument: Sendable {
         return (blocks, (offset, cut.blockCount))
     }
 
+    /// A reply cut off mid-stream, made to show its last line as what it
+    /// was becoming: a table's header row with no separator yet (or with only
+    /// part of one) is dropped, since it would draw as a row of pipes; an
+    /// open inline code span, bold run or link target on the last line is
+    /// closed. A row of an established table, finished or not, stays a row.
+    static func finishingCutText(_ text: String) -> String {
+        var lines = text.components(separatedBy: "\n")
+        // Inside an open code fence the text is code, drawn as a code box already.
+        let fences = lines.filter { Parser.fenceOpening($0) != nil }.count
+        guard fences % 2 == 0 else { return text }
+        while let last = lines.last, Parser.isBlank(last) { lines.removeLast() }
+        guard let last = lines.last else { return text }
+        let before = lines.count > 1 ? lines[lines.count - 2] : nil
+        func isTableLine(_ line: String?) -> Bool { line.map { Parser.tableCellCount($0) != nil } ?? false }
+        if last.trimmingCharacters(in: .whitespaces).first == "|", (Parser.tableCellCount(last) ?? 0) >= 2,
+           !isTableLine(before) {
+            // A header row alone: the table it starts has not begun.
+            lines.removeLast()
+        } else if let before, last.trimmingCharacters(in: .whitespaces).allSatisfy({ "|-: ".contains($0) }),
+                  !Parser.separates(header: before, separator: last),
+                  !isTableLine(lines.count > 2 ? lines[lines.count - 3] : nil) {
+            // A header row and part of its separator.
+            lines.removeLast(2)
+        }
+        guard var tail = lines.popLast() else { return lines.joined(separator: "\n") }
+        if tail.filter({ $0 == "`" }).count % 2 == 1 { tail += "`" }
+        if tail.components(separatedBy: "**").count % 2 == 0 { tail += "**" }
+        if let open = tail.range(of: "](", options: .backwards), !tail[open.upperBound...].contains(")") { tail += ")" }
+        lines.append(tail)
+        return lines.joined(separator: "\n")
+    }
+
     static func preview(_ rawContent: String, limit: Int) -> String {
         guard limit > 0 else { return "" }
         let document = ConversationMarkdownDocument(rawContent)
@@ -686,6 +718,15 @@ private extension ConversationMarkdownDocument {
                 }
             }
             return count
+        }
+
+        /// How many cells `line` has as a table row, or nil when it is not one.
+        static func tableCellCount(_ line: String) -> Int? { tableCells(line)?.count }
+
+        /// Whether `separator` is a table separator for a header `header`.
+        static func separates(header: String, separator: String) -> Bool {
+            guard let cells = tableCells(header), let alignments = tableSeparator(separator) else { return false }
+            return cells.count == alignments.count
         }
 
         private static func tableSeparator(_ line: String) -> [TableAlignment]? {
