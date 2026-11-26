@@ -153,8 +153,22 @@ enum DebugNavigationSignal {
         func webViews(in view: NSView) -> [WKWebView] {
             (view as? WKWebView).map { [$0] } ?? view.subviews.flatMap(webViews)
         }
-        let shown = webViews(in: view).filter { !$0.isHiddenOrHasHiddenAncestor && !$0.visibleRect.isEmpty }
-        var pieces: [(image: NSImage, frame: NSRect, whole: NSRect, framed: Bool)] = []
+        // What the window shows: a web view drawn fully transparent (a visual
+        // reply still loading) shows nothing, and is left out.
+        func shows(_ view: NSView) -> Bool {
+            var alpha: CGFloat = 1
+            var current: NSView? = view
+            while let next = current {
+                alpha *= next.alphaValue * CGFloat(next.layer?.opacity ?? 1)
+                current = next.superview
+            }
+            return alpha > 0.01
+        }
+        let shown = webViews(in: view).filter { !$0.isHiddenOrHasHiddenAncestor && !$0.visibleRect.isEmpty && shows($0) }
+        var pieces: [(image: NSImage, frame: NSRect, whole: NSRect, framed: Bool, startsFrame: Bool)] = []
+        // A web view whose picture never came is said beside the still,
+        // never passed off as an empty frame.
+        var missing: [String] = []
         let group = DispatchGroup()
         for webView in shown {
             let configuration = WKSnapshotConfiguration()
@@ -163,13 +177,28 @@ enum DebugNavigationSignal {
             let whole = view.convert(webView.bounds, from: webView)
             // A visual reply sits at the bottom of its rounded, stroked frame.
             let framed = webView is ConversationHTMLNativeWebView
+            let startsFrame = (webView as? ConversationHTMLNativeWebView)?.startsFrame == true
             group.enter()
-            webView.takeSnapshot(with: configuration) { image, _ in
-                if let image { pieces.append((image, frame, whole, framed)) }
-                group.leave()
+            func take(_ attempt: Int) {
+                webView.takeSnapshot(with: configuration) { image, error in
+                    if let image {
+                        pieces.append((image, frame, whole, framed, startsFrame))
+                        group.leave()
+                    } else if attempt < 3 {
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { take(attempt + 1) }
+                    } else {
+                        missing.append("web view at \(Int(whole.minX)),\(Int(whole.minY)) \(Int(whole.width))x\(Int(whole.height)): "
+                            + "no picture after \(attempt + 1) tries (\(error?.localizedDescription ?? "no error"))")
+                        group.leave()
+                    }
+                }
             }
+            take(0)
         }
         group.notify(queue: .main) {
+            let note = path.appendingPathExtension("missing-web.txt")
+            if missing.isEmpty { try? FileManager.default.removeItem(at: note) }
+            else { try? (missing.joined(separator: "\n") + "\n").write(to: note, atomically: true, encoding: .utf8) }
             if let context = NSGraphicsContext(bitmapImageRep: bitmap) {
                 NSGraphicsContext.saveGraphicsState()
                 NSGraphicsContext.current = context
@@ -183,11 +212,13 @@ enum DebugNavigationSignal {
                     NSGraphicsContext.saveGraphicsState()
                     if piece.framed {
                         // Only what the frame shows: inside its stroke, with its
-                        // rounded bottom corners (the header above keeps the top ones).
+                        // rounded bottom corners, and its top ones too when no
+                        // title row sits above the page.
                         let whole = unflipped(piece.whole)
                         let radius = ConversationMetrics.blockRadius - 1
+                        let top: CGFloat = piece.startsFrame ? -1 : radius
                         NSBezierPath(roundedRect: NSRect(x: whole.minX + 1, y: whole.minY + 1, width: whole.width - 2,
-                                                         height: whole.height + radius), xRadius: radius, yRadius: radius).addClip()
+                                                         height: whole.height + top), xRadius: radius, yRadius: radius).addClip()
                     }
                     piece.image.draw(in: unflipped(piece.frame))
                     NSGraphicsContext.restoreGraphicsState()
