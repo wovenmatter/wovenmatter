@@ -479,8 +479,9 @@ when an intentional design change is accepted.
   files"), each file once, failures with the kind that failed ("1 edit failed",
   "Ran 2 commands, 1 failed", "2 commands failed") and a warning on the group
   when any row failed, two kinds of search each by name, a web search as one
-  whatever its row's detail, and one or two tools by name (a step titled in
-  words by its title), never an unnamed action; a
+  whatever its row's detail, and one or two tools by name when their rows show
+  plain names (a step whose row is a phrase is counted, never quoted), never
+  an unnamed action; a
   narrow column takes the same facts in short ("1 folder listed · 2 files read"). Thinking looks the same everywhere.
   Live reasoning shows its last three lines, its cut top line fading out, under
   its title once it has one (the title is never prose in the trace); afterwards a

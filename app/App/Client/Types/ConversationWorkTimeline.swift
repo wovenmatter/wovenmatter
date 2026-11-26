@@ -311,27 +311,21 @@ public struct ConversationWorkGroup: Equatable, Identifiable, Sendable {
     // counts them all; the note is worded once the number of kinds is known.
     let kinds = order.map { action -> (parts: [SummaryPart], failed: Int) in
       let all = members[action] ?? []
-      // One or two tools of their own are named, as their rows name them.
       let names = all.map(\.workTimelineToolIdentity).reduce(into: [String]()) { names, name in
         if !name.isEmpty, !names.contains(name) { names.append(name) }
       }
       let failures = all.filter(\.workTimelineIsFailure).count
-      if action == .other, (1...2).contains(names.count), names.allSatisfy({ $0.count <= 40 }) {
+      // One or two tools its rows showed by a plain name are named; a step
+      // whose row is a phrase is counted with the rest, never quoted.
+      if action == .other, (1...2).contains(names.count), names.allSatisfy({ !$0.contains(" ") }) {
         let several = names.count == 1 && all.count > 1
         if failures == all.count {
           let text = names.joined(separator: " and ") + " failed" + (several ? " \(all.count) times" : "")
           return ([SummaryPart(sentence: text, compact: text, startsWithName: true)], 0)
         }
-        // A tool's name is used; a step titled in words ("Load skill:
-        // dataviz") is its own fact, as its row says it.
-        let tools = names.filter { !$0.contains(" ") }
-        let times = several ? " \(all.count) times" : ""
-        let named = tools.isEmpty ? [] : [SummaryPart(sentence: "Used " + tools.joined(separator: " and ") + times,
-                                                      compact: several ? "\(all.count)× \(names[0])" : tools.joined(separator: " · "))]
-        let titled = names.filter { $0.contains(" ") }.map {
-          SummaryPart(sentence: $0 + times, compact: several ? "\(all.count)× \($0)" : $0, startsWithName: true)
-        }
-        return (named + titled, failures)
+        return ([SummaryPart(
+          sentence: "Used " + names.joined(separator: " and ") + (several ? " \(all.count) times" : ""),
+          compact: several ? "\(all.count)× \(names[0])" : names.joined(separator: " · "))], failures)
       }
       if !action.claimsOutcome {
         if failures > 0, failures == all.count {
