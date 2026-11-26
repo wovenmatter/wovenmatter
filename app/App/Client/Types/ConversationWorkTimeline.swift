@@ -887,6 +887,13 @@ public extension AgentRunActivity {
 
   private static let workTimelineGenericTitles = ["tool", "use tool", "using a tool", "used a tool", "other", "execute"]
 
+  /// The titles Claude Code's adapter gives a call before its input names
+  /// anything (a read with no path yet is "Read File").
+  private static let workTimelinePlaceholderTitles: Set<String> = [
+    "read file", "preparing file…", "preparing file...", "edit", "edit notebook", "write", "find", "grep", "fetch",
+    "web search", "terminal", "task", "read", "search", "list",
+  ]
+
   private func workTimelineToolLabel(active: Bool, folder: String?) -> String {
     let generic = Self.workTimelineGenericTitles
     let label = title?.workTimelineSingleLine
@@ -900,7 +907,9 @@ public extension AgentRunActivity {
     // title it: show the whole command, which the row truncates in the
     // middle, keeping its real end. Any other title keeps the program only.
     if action == .command, let command = workTimelineTitledCommand {
-      if let language = command.workTimelineScriptLanguage { return (active ? "Running a " : "Ran a ") + language + " script" }
+      if let script = command.workTimelineScript {
+        return (active ? "Running a " : "Ran a ") + script.language + " script" + (script.more ? " \u{2026}" : "")
+      }
       return command.workTimelineCommandLine(root: root)
     }
     if let helper = workTimelineHelper { return helper.label(active: active, failed: failed) }
@@ -947,6 +956,12 @@ public extension AgentRunActivity {
             + (pattern.map { " for \u{201C}\(String($0.prefix(60)))\u{201D} in" } ?? "") + " \(place)"
         }
       }
+    }
+    // A title that stands in until the input arrives ("Read File", "Web
+    // search") names nothing: the row says what kind of step it is.
+    if rawInputJSON?.workTimelineNonempty == nil, let title = label,
+       Self.workTimelinePlaceholderTitles.contains(title.lowercased()), action != .other {
+      return action.liveLabel(active: active)
     }
     // Keep a provider's descriptive title; bare function names gain readable
     // action labels below.
@@ -1104,12 +1119,13 @@ extension String {
     return doing.count > 1 ? shown + " \u{2026}" : shown
   }
 
-  /// The language of the script a command runs, when running it is all the
-  /// command does: an interpreter fed a here-document (`python3 - <<'EOF'`,
-  /// its body, `EOF`) or given the script inline in one pair of single
-  /// quotes (`python3 -c '…'`, `node -e '…'`). Anything else, or anything
-  /// after the script, is not certain and gives nil.
-  var workTimelineScriptLanguage: String? {
+  /// The language of the script a command runs first, and whether lines that
+  /// do something follow it: an interpreter fed a here-document alone on the
+  /// first line (`python3 - <<'EOF'`, its body, `EOF`, then perhaps more
+  /// lines), or given the script inline in one pair of single quotes that
+  /// ends the command (`python3 -c '…'`, `node -e '…'`). Anything else is
+  /// not certain and gives nil.
+  var workTimelineScript: (language: String, more: Bool)? {
     let command = workTimelineDisplayCommand().trimmingCharacters(in: .whitespacesAndNewlines)
     let languages = ["python": "Python", "python3": "Python", "node": "Node.js", "ruby": "Ruby",
                      "bash": "shell", "sh": "shell", "zsh": "shell"]
@@ -1120,14 +1136,20 @@ extension String {
       return (0..<found.numberOfRanges).map { Range(found.range(at: $0), in: text).map { String(text[$0]) } ?? "" }
     }
     let lines = command.components(separatedBy: .newlines)
-    if let first = lines.first, lines.count >= 3,
+    if let first = lines.first,
        let parts = match(#"^(python3?|node|ruby|bash|sh|zsh)(?: -)? *<<-? *(['"]?)([A-Za-z_][A-Za-z0-9_]*)\2$"#, first),
-       lines.last?.trimmingCharacters(in: .whitespaces) == parts[3],
-       !lines.dropFirst().dropLast().contains(where: { $0.trimmingCharacters(in: .whitespaces) == parts[3] }) {
-      return languages[parts[1]]
+       let language = languages[parts[1]],
+       let end = lines.indices.dropFirst().first(where: { lines[$0].trimmingCharacters(in: .whitespaces) == parts[3] }) {
+      // What runs after the here-document ends, if anything.
+      let more = lines[(end + 1)...].contains { line in
+        let text = line.trimmingCharacters(in: .whitespaces)
+        return !text.isEmpty && !text.hasPrefix("#")
+      }
+      return (language, more)
     }
-    if let parts = match(#"^(python3?|node|ruby|bash|sh|zsh) +(-[ce]) +'[^']*'$"#, command), inlineFlag[parts[1]] == parts[2] {
-      return languages[parts[1]]
+    if let parts = match(#"^(python3?|node|ruby|bash|sh|zsh) +(-[ce]) +'[^']*'$"#, command), inlineFlag[parts[1]] == parts[2],
+       let language = languages[parts[1]] {
+      return (language, false)
     }
     return nil
   }
