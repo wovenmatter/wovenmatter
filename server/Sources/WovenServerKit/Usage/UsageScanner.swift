@@ -42,6 +42,8 @@ actor UsageScanner {
   /// While histories not read yet are read: the next stage to report and
   /// how many have been read since that began. The first pass begins one.
   private var backfill: (stage: Int, read: Int)? = (0, 0)
+  /// The history the last pass's share ended in, before its end.
+  private var unfinished: String?
 
   /// `environment` is the server's own, for the homes it names; `chunk` the
   /// most of a history read and saved in one step; `slice` how long one pass
@@ -162,6 +164,11 @@ actor UsageScanner {
     let order = { (a: Work, b: Work) in (a.modified, a.history.source) > (b.modified, b.history.source) }
     tails.sort(by: order)
     backlog.sort(by: order)
+    // After a pass whose share one history used up without reaching its
+    // end, the next begins with the history after it.
+    if let unfinished, let index = backlog.firstIndex(where: { $0.history.source == unfinished }) {
+      backlog = Array(backlog[(index + 1)...] + backlog[...index])
+    }
     if backfill == nil, backlog.contains(where: { Double($0.modified) / 1000 < now.timeIntervalSince1970 - 86_400 }) {
       backfill = (0, 0)
     }
@@ -187,13 +194,17 @@ actor UsageScanner {
   private func run(_ list: inout [Work], until deadline: Duration, backlog: Bool, sources: [String: UsageSource], now: Date,
                    into pass: inout Pass) async -> Bool {
     var first = true
+    if backlog { unfinished = nil }
     while let item = list.first {
       if Task.isCancelled { return false }
       if !first && clock() >= deadline { return true }
       first = false
       if backlog { report(before: Double(item.modified) / 1000, now: now) }
       let finished = (try? await read(item, known: sources[item.history.source], deadline: deadline, into: &pass)) ?? true
-      guard finished else { return !Task.isCancelled }
+      guard finished else {
+        if backlog { unfinished = item.history.source }
+        return !Task.isCancelled
+      }
       if backlog, backfill != nil { backfill?.read += 1 }
       list.removeFirst()
     }
@@ -473,7 +484,11 @@ actor UsageScanner {
                     identity: head.identity ?? "", boundary: lines.boundary, state: try Self.encode(state),
                     interrupted: end || stopped ? 0 : counted.interrupted)
       }
+      var blocks = 0
       while true {
+        // The scanner gives way now and then, so a stop can reach it.
+        blocks += 1
+        if blocks % 64 == 0 { await Task.yield() }
         if Task.isCancelled {
           // Ends the read cleanly; the next one decodes from the start again.
           if lines.reached != nil, !mismatch {
@@ -733,7 +748,8 @@ actor UsageScanner {
   private static let openCodeSource = "opencode"
 
   /// OpenCode keeps its history in one database, read on from the last
-  /// message seen, which must still be there, and the hour before it. Its size and change time
+  /// message seen, which must still be there; each new read takes in the
+  /// hour before it again. Its size and change time
   /// include the write-ahead log. Its reads are counted as a file's are;
   /// each page saved moves the place on and keeps the count until the
   /// last, so an interrupted read goes on from that page.
@@ -744,14 +760,44 @@ actor UsageScanner {
     do {
       let database = try ReadOnlyDatabase(path: path)
       var cursor: (time: Int64, id: String) = (0, "")
+      var overlap: OpenCodeOverlap?
       if let known, known.boundary == Self.openCodeBoundary(known.identity),
          try known.identity.isEmpty || HistoryReader.openCodeHas(database, message: known.identity) {
-        // The hour before the place is read again too, so a message whose
-        // update is stamped before its place was saved is not missed.
-        cursor = (max(0, known.offset - Self.openCodeOverlap), "")
+        cursor = (known.offset, known.identity)
+        if let pending = try? JSONDecoder().decode(OpenCodeOverlap.self, from: Data(known.state.utf8)) {
+          overlap = pending
+        } else if known.modified != 0, !known.identity.isEmpty {
+          // A new read also takes in the hour before the place again, so a
+          // message whose update is stamped before the place was saved is
+          // not missed. That hour is read with a place of its own; the
+          // place read on from only moves forward.
+          overlap = OpenCodeOverlap(afterTime: max(0, cursor.time - Self.openCodeOverlap), afterID: "",
+                                    throughTime: cursor.time, throughID: cursor.id)
+        }
       }
       let limit = 500
       while true {
+        if var again = overlap {
+          let page = try HistoryReader.openCode(database, after: (again.afterTime, again.afterID),
+                                                through: (again.throughTime, again.throughID), limit: limit)
+          let done = page.rows < limit || page.cursor == (again.afterTime, again.afterID)
+          (again.afterTime, again.afterID) = page.cursor
+          let stopped = !done && (Task.isCancelled || clock() >= deadline)
+          let next = UsageSource(id: source, offset: cursor.time, identity: cursor.id, boundary: Self.openCodeBoundary(cursor.id),
+                                 state: done ? "" : String(decoding: try JSONEncoder().encode(again), as: UTF8.self),
+                                 interrupted: stopped ? 0 : counted.interrupted)
+          let result = try await save(page.entries, next)
+          saved = next
+          overlap = done ? nil : again
+          pass.found += page.entries.count
+          pass.added += result.added
+          pass.records += result.records
+          if stopped {
+            pass.read += 1
+            return false
+          }
+          continue
+        }
         let page = try HistoryReader.openCode(database, after: cursor, limit: limit)
         let last = page.rows < limit || page.cursor == cursor
         // A stop or the end of the slice ends the read here, to go on at the next pass.
@@ -778,6 +824,15 @@ actor UsageScanner {
   }
 
   static let openCodeOverlap: Int64 = 3_600_000
+
+  /// The part of OpenCode's database read again before reading on: the
+  /// messages after one place up to and with another.
+  private struct OpenCodeOverlap: Codable {
+    var afterTime: Int64
+    var afterID: String
+    var throughTime: Int64
+    var throughID: String
+  }
 
   /// The boundary of OpenCode's place: the message it is after.
   private static func openCodeBoundary(_ message: String) -> String {

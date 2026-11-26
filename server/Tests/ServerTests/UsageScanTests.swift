@@ -774,9 +774,107 @@ private func codexTurn(_ turn: String, at: String) -> String {
              codexTurn("turn-b", at: "2026-03-02T13:02:00.000Z"),
              codexCount(at: "2026-03-02T13:03:00.000Z", last: (70, 0, 7), total: (70, 0, 7))],
             to: folder.appendingPathComponent("rollout-2026-03-02T13-00-00-\(leftover).jsonl"))
+  // The same, where the next turn starts with no turn_context of its own.
+  let started = "0000eeee-0000-7000-8000-000000000006"
+  try write([codexMeta(started, at: "2026-03-02T14:00:00.000Z"), codexTurn("turn-c", at: "2026-03-02T14:00:01.000Z"),
+             codexRecord(at: "2026-03-02T14:01:00.000Z", thread: started, response: "resp_c", (80, 0, 8)),
+             #"{"timestamp":"2026-03-02T14:02:00.000Z","type":"event_msg","payload":{"type":"task_started","turn_id":"rollout-2"}}"#,
+             codexCount(at: "2026-03-02T14:03:00.000Z", last: (80, 0, 8), total: (80, 0, 8))],
+            to: folder.appendingPathComponent("rollout-2026-03-02T14-00-00-\(started).jsonl"))
   let library = try await Library.open(folder: try temporary("usage-library"), machineName: "a")
   await UsageScanner(library: library, home: home).scan()
   let groups = try await library.usage(from: .distantPast, to: .distantFuture, periodSeconds: 3600).groups
   func requests(_ thread: String) -> Int { groups.filter { $0.nativeSessionID == thread }.reduce(0) { $0 + $1.amounts.requests } }
   #expect(requests(first) == 1 && requests(second) == 1 && requests(fork) == 0 && requests(bare) == 0 && requests(leftover) == 2)
+  #expect(requests(started) == 2)
+}
+
+/// OpenCode's hour before its place is read again with a place of its own,
+/// so a slice that ends inside it goes on from there and the read finishes.
+@Test func openCodesHourBeforeItsPlaceIsReadOnAcrossPasses() async throws {
+  let home = try temporary("usage-home")
+  let url = home.appendingPathComponent(".local/share/opencode/opencode.db")
+  try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+  try DatabaseFile.create(at: url)
+  let database = try DatabaseFile(url: url, isCopy: false)
+  _ = try database.execute("""
+    CREATE TABLE session_v2 (id TEXT PRIMARY KEY, parent_id TEXT);
+    CREATE TABLE session_message (id TEXT PRIMARY KEY, session_id TEXT, type TEXT, seq INTEGER, time_created INTEGER,
+      time_updated INTEGER, data TEXT);
+    """)
+  func insert(_ range: Range<Int>) throws {
+    let rows = range.map { index in
+      let at = 1_767_614_400_000 + Int64(index) * 1000
+      return "('msg_\(String(format: "%04d", index))', 'ses', 'assistant', \(index), \(at), \(at), "
+        + #"'{"tokens":{"input":1,"output":1,"reasoning":0,"cache":{"read":0,"write":0}},"cost":0,"model":{"id":"m","providerID":"p"},"time":{"completed":\#(at)}}')"#
+    }
+    _ = try database.execute("INSERT INTO session_message VALUES " + rows.joined(separator: ", "))
+  }
+  try insert(0..<700)
+  let library = try await Library.open(folder: try temporary("usage-library"), machineName: "a")
+  #expect(await UsageScanner(library: library, home: home).scan().added == 700)
+  try insert(700..<701)
+  let scanner = UsageScanner(library: library, home: home, slice: .seconds(1), clock: tickingClock())
+  var passes = 0
+  while passes < 10 {
+    passes += 1
+    if await scanner.scan().left == 0 { break }
+  }
+  #expect(passes < 10)
+  #expect(try await totals(library)[.openCode]?.requests == 701)
+}
+
+/// When one history uses a pass's share without reaching its end, the next
+/// pass begins with the one after it.
+@Test func aHistoryThatTakesItsShareLetsTheNextOneGoFirst() async throws {
+  let home = try temporary("usage-home")
+  let slow = claudeFile(home, session(1)), older = claudeFile(home, session(2))
+  try write(manyLines("slow", session: session(1), count: 400), to: slow)
+  try write(manyLines("older", session: session(2), count: 1), to: older)
+  try setModified(older, Date().addingTimeInterval(-3600))
+  let library = try await Library.open(folder: try temporary("usage-library"), machineName: "a")
+  let order = Mutex<[String]>([])
+  let scanner = UsageScanner(library: library, home: home, chunk: 1_000, slice: .seconds(2),
+                             willRead: { source in order.withLock { $0.append(source) } }, clock: tickingClock())
+  await scanner.scan()
+  #expect(order.withLock { $0 } == [UsageScanner.source("claude", "/-tmp-example/\(session(1)).jsonl")])
+  order.withLock { $0.removeAll() }
+  await scanner.scan()
+  #expect(order.withLock { $0 }.first == UsageScanner.source("claude", "/-tmp-example/\(session(2)).jsonl"))
+}
+
+/// A stop reaches the scanner while it decodes a large compressed rollout,
+/// which then ends where it was, counting nothing as interrupted.
+@Test func aStopReachesALongCompressedRead() async throws {
+  let home = try temporary("usage-home")
+  let thread = "0000ffff-0000-7000-8000-000000000009"
+  var lines = [#"{"timestamp":"2026-01-05T10:00:00.000Z","type":"session_meta","payload":{"id":"\#(thread)"}}"#]
+  for index in 0..<100_000 {
+    lines.append(#"{"timestamp":"2026-01-05T10:01:00.000Z","type":"token_usage_record","payload":{"thread_id":"\#(thread)","response_id":"resp_\#(index)","usage":{"input_tokens":10,"output_tokens":2,"total_tokens":12}}}"#)
+  }
+  let plain = Data(lines.map { $0 + "\n" }.joined().utf8)
+  let url = home.appendingPathComponent(".codex/sessions/2026/01/05/rollout-2026-01-05T10-00-00-\(thread).jsonl.zst")
+  try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+  try rawFrames(plain).write(to: url)
+  let library = try await Library.open(folder: try temporary("usage-library"), machineName: "a")
+  let (began, signal) = AsyncStream<Void>.makeStream()
+  let scanner = UsageScanner(library: library, home: home, chunk: 1 << 30) { _ in signal.yield() }
+  await scanner.start()
+  for await _ in began { break }
+  try await Task.sleep(for: .milliseconds(200))
+  await scanner.stop()
+  let sources = try await library.usageSources().values
+  #expect(sources.count == 1 && sources.allSatisfy { $0.interrupted == 0 && $0.offset < Int64(plain.count) })
+}
+
+/// A subscriber that has not taken a library event yet gets, with the one
+/// that replaces it, the tables of both.
+@Test func aReplacedLibraryEventKeepsItsTables() async {
+  let (events, continuation) = AsyncStream<LibraryEvent>.makeStream(bufferingPolicy: .bufferingNewest(1))
+  deliver(LibraryEvent(changed: 1, tables: ["usage_hours"]), to: continuation)
+  deliver(LibraryEvent(changed: 2, tables: ["settings"]), to: continuation)
+  continuation.finish()
+  var received: [LibraryEvent] = []
+  for await event in events { received.append(event) }
+  #expect(received == [LibraryEvent(changed: 2, tables: ["settings", "usage_hours"])])
 }

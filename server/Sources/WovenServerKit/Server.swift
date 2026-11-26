@@ -448,7 +448,7 @@ private func makeRouter(library: Library, sessions: SessionManager, peers: PeerS
       for await changed in changes {
         let tables = (try? await library.tablesChanged(after: last)) ?? Schema.synced.map(\.name)
         last = changed
-        continuation.yield(LibraryEvent(changed: changed, tables: tables))
+        deliver(LibraryEvent(changed: changed, tables: tables), to: continuation)
       }
       continuation.finish()
     }
@@ -478,4 +478,14 @@ private func makeRouter(library: Library, sessions: SessionManager, peers: PeerS
     throw ProtocolError(.notFound, "No content \(request.digest).")
   }
   return router
+}
+
+/// Hands a library event to a subscriber that holds only the newest one. An
+/// event that replaces one not yet taken carries that one's tables too, so
+/// no change is lost to the subscriber.
+func deliver(_ event: LibraryEvent, to continuation: AsyncStream<LibraryEvent>.Continuation) {
+  guard case .dropped(let replaced) = continuation.yield(event), replaced != event else { return }
+  var merged = event
+  merged.tables = Array(Set(replaced.tables).union(event.tables)).sorted()
+  continuation.yield(merged)
 }

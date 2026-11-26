@@ -52,7 +52,8 @@ enum HistoryKind: Sendable, Equatable {
   /// A line can only count if it holds one of these.
   var markers: [[UInt8]] {
     switch self {
-    case .codex: [#""token_usage_record""#, #""token_count""#, #""session_meta""#, #""turn_context""#].map { Array($0.utf8) }
+    case .codex: [#""token_usage_record""#, #""token_count""#, #""session_meta""#, #""turn_context""#, #""task_started""#,
+                  #""turn_started""#].map { Array($0.utf8) }
     case .claude: [Array(#""usage""#.utf8)]
     case .grok: [Array(#""usage""#.utf8), Array(#"Usage""#.utf8)]
     case .pi: [#""usage""#, #""session""#, #""model_change""#].map { Array($0.utf8) }
@@ -109,6 +110,13 @@ enum HistoryReader {
       return [codexEntry(id: "codex:" + response, nativeSession: state.owner ?? thread ?? "", usage: codexVector(usage),
                          at: at, state)]
     case "event_msg":
+      // A turn starts: a record of the last one is restated within it or not
+      // at all. The start's own identifier may be made up for a copy, so it
+      // does not name the turn.
+      if ["task_started", "turn_started"].contains(payload["type"] as? String) {
+        state.unpaired = nil
+        return []
+      }
       guard payload["type"] as? String == "token_count", let info = payload["info"] as? [String: Any],
             let last = info["last_token_usage"] as? [String: Any], !last.isEmpty else { return [] }
       let usage = codexVector(last)
@@ -269,14 +277,18 @@ enum HistoryReader {
   /// OpenCode 2's database: each finished assistant message of
   /// `session_message` holds its tokens, cost and model. Reasoning tokens are
   /// billed as output. A sub-agent's session counts under its parent.
-  static func openCode(_ database: ReadOnlyDatabase, after cursor: (time: Int64, id: String), limit: Int)
-    throws -> (entries: [UsageEntry], cursor: (time: Int64, id: String), rows: Int) {
+  /// The page of messages after `cursor`, up to and with `through` when given.
+  static func openCode(_ database: ReadOnlyDatabase, after cursor: (time: Int64, id: String), through: (time: Int64, id: String)? = nil,
+                       limit: Int) throws -> (entries: [UsageEntry], cursor: (time: Int64, id: String), rows: Int) {
+    let end = through ?? (.max, "")
     let rows = try database.query("""
       SELECT m.id, m.time_updated, m.data, COALESCE(s.parent_id, m.session_id) AS owner FROM session_message m
       LEFT JOIN session_v2 s ON s.id = m.session_id
       WHERE m.type = 'assistant' AND (m.time_updated > ?1 OR (m.time_updated = ?1 AND m.id > ?2))
-      ORDER BY m.time_updated, m.id LIMIT ?3
-      """, [.integer(cursor.time), .text(cursor.id), .integer(Int64(limit))])
+        AND (?5 = 0 OR m.time_updated < ?3 OR (m.time_updated = ?3 AND m.id <= ?4))
+      ORDER BY m.time_updated, m.id LIMIT ?6
+      """, [.integer(cursor.time), .text(cursor.id), .integer(end.time), .text(end.id), .integer(through == nil ? 0 : 1),
+            .integer(Int64(limit))])
     var next = cursor
     var entries: [UsageEntry] = []
     for row in rows {
