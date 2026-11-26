@@ -10,12 +10,6 @@ import { startAgent } from './fixtures/client.mjs';
 const server = fileURLToPath(new URL('./fixtures/woven-mcp.mjs', import.meta.url));
 const catalog = JSON.parse(readFileSync(new URL('./fixtures/woven-catalog.json', import.meta.url), 'utf8'));
 
-// Starts the agent; a test that fails still stops it.
-function start(t, options) {
-  const agent = startAgent(options);
-  t.after(() => agent.stop());
-  return agent;
-}
 async function folders(t) {
   const root = await mkdtemp(join(tmpdir(), 'pi-durable-codemode-'));
   t.after(() => rm(root, { recursive: true, force: true }));
@@ -51,7 +45,7 @@ test('code mode is offered beside the other tools, alone, or not at all, as Sett
     ['only', tools => assert.deepEqual(tools, ['codemode'])],
     ['off', tools => { assert.ok(!tools.includes('codemode')); assert.ok(tools.includes('mcp__woven__render_html')); assert.ok(tools.includes('bash')); }],
   ]) {
-    const agent = start(t, { data, cwd, settings: codeMode === undefined ? {} : { codeMode } });
+    const agent = startAgent(t, { data, cwd, settings: codeMode === undefined ? {} : { codeMode } });
     const { result: { sessionId } } = await agent.request('session/new', { cwd, mcpServers: woven(log) });
     const tools = await offered(agent, sessionId);
     assert.ok(!tools.some(name => name.startsWith('pi.codemode.')), `${codeMode}: ${tools}`);
@@ -63,7 +57,7 @@ test('code mode is offered beside the other tools, alone, or not at all, as Sett
 test('the codemode section declares every Woven tool, so scripts need no search, and Off leaves it out', async t => {
   const { data, cwd, log } = await folders(t);
   const settings = { codeMode: 'on' };
-  const agent = start(t, { data, cwd, settings });
+  const agent = startAgent(t, { data, cwd, settings });
   const { result: { sessionId } } = await agent.request('session/new', { cwd, mcpServers: woven(log) });
   const prompt = await ask(agent, sessionId, 'prompt?');
   assert.ok(prompt.includes('Tools scripts can call'));
@@ -91,7 +85,7 @@ test('the codemode section declares every Woven tool, so scripts need no search,
 test('a change of code mode applies from the next prompt', async t => {
   const { data, cwd, log } = await folders(t);
   const settings = { codeMode: 'on' };
-  const agent = start(t, { data, cwd, settings });
+  const agent = startAgent(t, { data, cwd, settings });
   const { result: { sessionId } } = await agent.request('session/new', { cwd, mcpServers: woven(log) });
   const on = await offered(agent, sessionId);
   assert.ok(on.includes('codemode') && on.includes('mcp__woven__list_sessions'));
@@ -106,7 +100,7 @@ test('a change of code mode applies from the next prompt', async t => {
 
   // The conversation keeps the last mode it was given; a new process applies the current one when it opens.
   settings.codeMode = 'only';
-  const again = start(t, { data, cwd, settings });
+  const again = startAgent(t, { data, cwd, settings });
   await again.request('session/load', { sessionId, cwd, mcpServers: woven(log) });
   assert.deepEqual(await offered(again, sessionId), ['codemode']);
   await again.stop();
@@ -114,7 +108,7 @@ test('a change of code mode applies from the next prompt', async t => {
 
 test('a script calls Woven tools, gets their values, images and errors, and shows as one code call with the calls it made', async t => {
   const { data, cwd, log } = await folders(t);
-  const agent = start(t, { data, cwd, settings: { codeMode: 'only' } });
+  const agent = startAgent(t, { data, cwd, settings: { codeMode: 'only' } });
   const { result: { sessionId } } = await agent.request('session/new', { cwd, mcpServers: woven(log) });
   const script = [
     'const sessions = await tools.mcp__woven__list_sessions({});',
@@ -169,7 +163,7 @@ test('a script calls Woven tools, gets their values, images and errors, and show
 
 test('a failure the script does not catch fails it, with the error text', async t => {
   const { data, cwd, log } = await folders(t);
-  const agent = start(t, { data, cwd });
+  const agent = startAgent(t, { data, cwd });
   const { result: { sessionId } } = await agent.request('session/new', { cwd, mcpServers: woven(log) });
   const answer = await ask(agent, sessionId, "script: await tools.mcp__woven__read_session({ sessionID: 'gone' });");
   assert.ok(answer.includes('Script failed') && answer.includes('There is no session gone.'), answer);
@@ -183,7 +177,7 @@ test('a failure the script does not catch fails it, with the error text', async 
 
 test('a direct MCP call still gives the model and Woven its content as it was', async t => {
   const { data, cwd, log } = await folders(t);
-  const agent = start(t, { data, cwd });
+  const agent = startAgent(t, { data, cwd });
   const { result: { sessionId } } = await agent.request('session/new', { cwd, mcpServers: woven(log) });
   const answer = await ask(agent, sessionId, 'call: mcp__woven__preview_html {"html":"<p>hi</p>"}');
   assert.ok(answer.includes('{"width":728,"contentHeight":120,"missingImages":[]}') && answer.includes('[images: 1]'), answer);
@@ -205,14 +199,14 @@ test('a direct MCP call still gives the model and Woven its content as it was', 
 
 test('a script a restart interrupts resumes without repeating the calls it finished', async t => {
   const { data, cwd, log } = await folders(t);
-  const first = start(t, { data, cwd });
+  const first = startAgent(t, { data, cwd });
   const { result: { sessionId } } = await first.request('session/new', { cwd, mcpServers: woven(log, 60000) });
   const script = "const a = await tools.mcp__woven__list_sessions({}); const b = await tools.mcp__woven__search_library({ query: 'slow' }); text(a.sessions[0].title + ' + ' + b.items[0].title);";
   void first.request('session/prompt', { sessionId, prompt: [{ type: 'text', text: `script: ${script}` }] });
   await until(() => frames(first, 'call-script-1').some(update => update._meta?.wovenCalls?.some(call => call.name === 'mcp__woven__search_library')));
   await first.stop();
 
-  const second = start(t, { data, cwd });
+  const second = startAgent(t, { data, cwd });
   await second.request('session/load', { sessionId, cwd, mcpServers: woven(log, 10) });
   await until(() => frames(second, 'call-script-1').some(update => update.status === 'completed'));
   const done = frames(second, 'call-script-1').at(-1);
@@ -230,7 +224,7 @@ test('a script a restart interrupts resumes without repeating the calls it finis
 test('a subagent keeps its parent code mode, without subagents of its own', async t => {
   const { data, cwd, log } = await folders(t);
   const settings = { codeMode: 'only' };
-  const agent = start(t, { data, cwd, settings });
+  const agent = startAgent(t, { data, cwd, settings });
   const { result: { sessionId } } = await agent.request('session/new', { cwd, mcpServers: woven(log) });
   const only = await ask(agent, sessionId, "script: text(await tools.subagent({ description: 'Tools', prompt: 'tools?' }));");
   assert.match(only, /tools: codemode \(turn 1\)/);
