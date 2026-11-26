@@ -27,47 +27,98 @@ enum Zstd {
     return Data(output)
   }
 
-  /// Decodes one input in order, one block per call.
+  /// Decodes one input in order, one block per call, reading it in pieces
+  /// as it goes: only the block being decoded is held, never the whole input.
   struct Decoder {
-    private let input: Data
+    /// Up to the given number of the input's next bytes; none at its end.
+    private let read: (Int) throws -> Data
     private let maximumWindow: Int
-    private var position = 0
+    private var buffer: [UInt8] = []
+    /// Where the unread part of `buffer` starts.
+    private var start = 0
+    private var ended = false
     private var frame: Frame?
 
-    init(_ input: Data, maximumWindow: Int = Zstd.maximumWindow) {
-      self.input = input
+    init(maximumWindow: Int = Zstd.maximumWindow, read: @escaping (Int) throws -> Data) {
+      self.read = read
       self.maximumWindow = maximumWindow
+    }
+
+    init(_ data: Data, maximumWindow: Int = Zstd.maximumWindow) {
+      var rest = data[...]
+      self.init(maximumWindow: maximumWindow) { count in
+        defer { rest = rest.dropFirst(count) }
+        return Data(rest.prefix(count))
+      }
+    }
+
+    /// Makes `count` unread bytes available, fewer only at the input's end.
+    /// Returns how many are.
+    private mutating func fill(_ count: Int) throws -> Int {
+      if start > 0, start >= buffer.count / 2 {
+        buffer.removeFirst(start)
+        start = 0
+      }
+      while buffer.count - start < count, !ended {
+        let piece = try read(max(count - (buffer.count - start), 1 << 20))
+        if piece.isEmpty { ended = true } else { buffer.append(contentsOf: piece) }
+      }
+      return min(count, buffer.count - start)
+    }
+
+    /// Runs `body` over the next `count` unread bytes (fewer at the end);
+    /// `body` returns how many it used.
+    private mutating func withBytes<T>(_ count: Int, _ body: (UnsafeBufferPointer<UInt8>) throws -> (T, Int)) throws -> T {
+      let available = try fill(count)
+      let (result, used) = try buffer.withUnsafeBufferPointer { all in
+        try body(UnsafeBufferPointer(rebasing: all[start..<(start + available)]))
+      }
+      start += used
+      return result
     }
 
     /// The bytes of the next block, or nil once the input is used up.
     mutating func next() throws -> [UInt8]? {
-      try input.withUnsafeBytes { raw in
-        let input = raw.bindMemory(to: UInt8.self)
-        while true {
-          if var current = frame {
-            let (bytes, next, finished) = try current.nextBlock(input, at: position)
-            position = next
-            frame = finished ? nil : current
-            return bytes
+      while true {
+        if var current = frame {
+          // The block header says how much of the input the block takes.
+          let head = try withBytes(4) { input -> ([UInt8], Int) in (Array(input), 0) }
+          guard head.count >= 3 else { throw Failure("truncated block header") }
+          let header = Int(head[0]) | Int(head[1]) << 8 | Int(head[2]) << 16
+          let size = header >> 3
+          guard size <= maximumBlock else { throw Failure("block too large") }
+          let body = (header >> 1) & 3 == 1 ? 1 : size
+          let need = 3 + body + (header & 1 != 0 && current.checksum ? 4 : 0)
+          let (bytes, finished) = try withBytes(need) { input in
+            let (bytes, next, finished) = try current.nextBlock(input, at: 0)
+            return ((bytes, finished), next)
           }
-          guard position < input.count else { return nil }
-          guard input.count - position >= 4 else { throw Failure("truncated frame") }
-          let magic = UInt32(input[position]) | UInt32(input[position + 1]) << 8 | UInt32(input[position + 2]) << 16
-            | UInt32(input[position + 3]) << 24
-          position += 4
-          if magic & 0xFFFF_FFF0 == 0x184D_2A50 {
-            guard input.count - position >= 4 else { throw Failure("truncated skippable frame") }
-            let size = Int(input[position]) | Int(input[position + 1]) << 8 | Int(input[position + 2]) << 16
-              | Int(input[position + 3]) << 24
-            guard input.count - position - 4 >= size else { throw Failure("truncated skippable frame") }
-            position += 4 + size
-            continue
-          }
-          guard magic == 0xFD2F_B528 else { throw Failure("not a Zstandard frame") }
-          var started = Frame()
-          position = try started.header(input, at: position, maximumWindow: maximumWindow)
-          frame = started
+          frame = finished ? nil : current
+          return bytes
         }
+        let magic = try withBytes(4) { input -> (UInt32?, Int) in
+          guard !input.isEmpty else { return (nil, 0) }
+          guard input.count == 4 else { throw Failure("truncated frame") }
+          return (UInt32(input[0]) | UInt32(input[1]) << 8 | UInt32(input[2]) << 16 | UInt32(input[3]) << 24, 4)
+        }
+        guard let magic else { return nil }
+        if magic & 0xFFFF_FFF0 == 0x184D_2A50 {
+          var size = try withBytes(4) { input -> (Int, Int) in
+            guard input.count == 4 else { throw Failure("truncated skippable frame") }
+            return (Int(input[0]) | Int(input[1]) << 8 | Int(input[2]) << 16 | Int(input[3]) << 24, 4)
+          }
+          while size > 0 {
+            let skipped = try withBytes(min(size, 1 << 20)) { input -> (Int, Int) in (input.count, input.count) }
+            guard skipped > 0 else { throw Failure("truncated skippable frame") }
+            size -= skipped
+          }
+          continue
+        }
+        guard magic == 0xFD2F_B528 else { throw Failure("not a Zstandard frame") }
+        var started = Frame()
+        let window = maximumWindow
+        try withBytes(14) { input -> (Void, Int) in ((), try started.header(input, at: 0, maximumWindow: window)) }
+        frame = started
       }
     }
   }

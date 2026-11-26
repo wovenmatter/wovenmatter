@@ -109,8 +109,9 @@ extension Library {
       calendar.timeZone = zone
       return calendar
     }
-    // Local days are folded from quarter hours: every zone's offset is a
-    // whole number of them, so none spans two local days.
+    // Local days are folded from quarter-hour groups of the rows. A row of
+    // usage read from a history sums a UTC hour and falls where its newest
+    // response does, so days are exact where the zone's offset is whole hours.
     let period = Int64(calendar == nil ? seconds : 900) * 1000
     let range: [SQLValue] = [.integer(Self.millis(start)), .integer(Self.millis(end))]
     let history = Self.historyRuntimes
@@ -306,12 +307,13 @@ extension Library {
   /// Publishes every hour of one harness session again, for when the Woven
   /// Matter session it belongs to changes.
   static func publishSession(runtime: RuntimeKind, nativeSession: String, _ writer: Writer) throws {
-    let rows = try writer.db.query("""
-      SELECT DISTINCT runtime, native_session, model, woven, at FROM usage_responses WHERE runtime = ? AND native_session = ?
-      """, [.text(runtime.rawValue), .text(nativeSession)])
-    for hour in Set(rows.map(UsageHour.init)).sorted(by: { $0.order.lexicographicallyPrecedes($1.order) }) {
-      _ = try publish(hour, writer)
+    let hours = try writer.db.query("""
+      SELECT DISTINCT model, woven, at / 3600000 * 3600000 AS hour FROM usage_responses WHERE runtime = ? AND native_session = ?
+      """, [.text(runtime.rawValue), .text(nativeSession)]).map { row in
+      UsageHour(runtime: runtime.rawValue, nativeSession: nativeSession, model: row.text("model") ?? "",
+                hour: row.integer("hour") ?? 0, woven: row.bool("woven"))
     }
+    for hour in hours { _ = try publish(hour, writer) }
   }
 
   /// Writes the synced row of one group from the ledger, unless it already

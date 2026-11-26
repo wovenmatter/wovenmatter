@@ -33,24 +33,32 @@ actor UsageScanner {
   private let environment: [String: String]
   private let chunk: Int
   private let slice: Duration
+  /// The time gone by, for the slice.
+  private let clock: @Sendable () -> Duration
   private var task: Task<Void, Never>?
   /// For tests: called with a history's source as its read begins.
   private let willRead: (@Sendable (String) async -> Void)?
-  /// While a backlog is read: the next stage to report and how many
-  /// histories have been read since it began.
-  private var backlog: (stage: Int, read: Int)?
+  private let log: @Sendable (String) -> Void
+  /// While histories not read yet are read: the next stage to report and
+  /// how many have been read since that began. The first pass begins one.
+  private var backfill: (stage: Int, read: Int)? = (0, 0)
 
   /// `environment` is the server's own, for the homes it names; `chunk` the
   /// most of a history read and saved in one step; `slice` how long one pass
-  /// reads before it ends.
+  /// reads before it ends, by `clock`.
   init(library: Library, home: URL, environment: [String: String] = [:], chunk: Int = 64 * 1024 * 1024,
-       slice: Duration = .seconds(20), willRead: (@Sendable (String) async -> Void)? = nil) {
+       slice: Duration = .seconds(20), willRead: (@Sendable (String) async -> Void)? = nil,
+       clock: (@Sendable () -> Duration)? = nil,
+       log: @escaping @Sendable (String) -> Void = { FileHandle.standardOutput.write(Data(("woven-server: " + $0 + "\n").utf8)) }) {
     self.library = library
     self.home = home
     self.environment = environment
     self.chunk = max(chunk, 1)
     self.slice = slice
+    let origin = ContinuousClock.now
+    self.clock = clock ?? { ContinuousClock.now - origin }
     self.willRead = willRead
+    self.log = log
   }
 
   func start(every interval: Duration = .seconds(120)) {
@@ -77,13 +85,9 @@ actor UsageScanner {
     let pass = await scan()
     guard pass.read > 0 || pass.records > 0 else { return pass.left }
     let seconds = String(format: "%.1f", Date().timeIntervalSince(started))
-    Self.log("usage read \(pass.read) histories, \(pass.added) new of \(pass.found) responses, \(pass.records) records, "
+    log("usage read \(pass.read) histories, \(pass.added) new of \(pass.found) responses, \(pass.records) records, "
              + "in \(seconds)s" + (pass.left > 0 ? ", \(pass.left) left" : ""))
     return pass.left
-  }
-
-  private static func log(_ line: String) {
-    FileHandle.standardOutput.write(Data(("woven-server: " + line + "\n").utf8))
   }
 
   // MARK: Passes
@@ -118,14 +122,16 @@ actor UsageScanner {
   /// after this long even if it has not changed.
   static let passedOverRetry: Int64 = 86_400_000
 
-  /// One pass: the tails of histories that grew, then the rest of the work
-  /// newest first, until the slice is used up.
+  /// One pass. First the tails of histories read before that grew, for at
+  /// most half the slice when others wait; then the histories not read yet
+  /// (or not to their end, or whose place cannot be trusted), newest first,
+  /// for the rest of it. Whatever is left comes first again next pass.
   @discardableResult
   func scan() async -> Pass {
     var pass = Pass()
     guard let sources = try? await library.usageSources() else { return pass }
     let now = Date()
-    var work: [Work] = []
+    var tails: [Work] = [], backlog: [Work] = []
     for history in histories() {
       let size: Int64, modified: Int64
       switch history {
@@ -147,45 +153,66 @@ actor UsageScanner {
       let trusted = known.map { !$0.boundary.isEmpty } ?? false
       if let known, trusted, known.size == size, known.modified == modified,
          known.passedOver == 0 || Int64(now.timeIntervalSince1970 * 1000) - known.passedOver < Self.passedOverRetry { continue }
-      work.append(Work(history: history, size: size, modified: modified, tail: trusted && known?.passedOver == 0))
+      // Read to its end before (its change time recorded then), and readable.
+      let tail = trusted && known?.passedOver == 0 && known?.modified != 0
+      let work = Work(history: history, size: size, modified: modified, tail: tail)
+      if tail { tails.append(work) } else { backlog.append(work) }
     }
-    // Tails first, then newest first: a history unchanged since a time
-    // holds nothing newer than it.
-    work.sort { ($0.tail ? 1 : 0, $0.modified, $0.history.source) > ($1.tail ? 1 : 0, $1.modified, $1.history.source) }
-    if backlog == nil, work.contains(where: { !$0.tail && Double($0.modified) / 1000 < now.timeIntervalSince1970 - 86_400 }) {
-      backlog = (0, 0)
+    // Newest first: a history unchanged since a time holds nothing newer than it.
+    let order = { (a: Work, b: Work) in (a.modified, a.history.source) > (b.modified, b.history.source) }
+    tails.sort(by: order)
+    backlog.sort(by: order)
+    if backfill == nil, backlog.contains(where: { Double($0.modified) / 1000 < now.timeIntervalSince1970 - 86_400 }) {
+      backfill = (0, 0)
     }
-    let deadline = ContinuousClock.now + slice
-    for (index, item) in work.enumerated() {
-      if Task.isCancelled || (index > 0 && ContinuousClock.now >= deadline) {
-        pass.left = work.count - index
-        return pass
-      }
-      if !item.tail { report(before: Double(item.modified) / 1000, now: now) }
-      let finished = (try? await read(item, known: sources[item.history.source], deadline: deadline, into: &pass)) ?? true
-      if !item.tail, backlog != nil { backlog?.read += 1 }
-      if !finished {
-        pass.left = work.count - index
-        return pass
-      }
+    let begin = clock()
+    let end = begin + slice
+    let tailsEnd = backlog.isEmpty ? end : begin + slice / 2
+
+    if await run(&tails, until: tailsEnd, backlog: false, sources: sources, now: now, into: &pass),
+       await run(&backlog, until: end, backlog: true, sources: sources, now: now, into: &pass), backlog.isEmpty, clock() < end {
+      _ = await run(&tails, until: end, backlog: false, sources: sources, now: now, into: &pass)
     }
-    report(before: nil, now: now)
-    backlog = nil
+    pass.left = tails.count + backlog.count
+    if backlog.isEmpty, !Task.isCancelled {
+      report(before: nil, now: now)
+      backfill = nil
+    }
     return pass
   }
 
-  /// Reports each backlog stage that is complete once the work reaches a
-  /// history last changed at `modified` (nil: the work is done).
+  /// Reads the histories of `list` from the front until `deadline`, the
+  /// first one whatever the time, removing those read to their end.
+  /// Returns false when a stop came.
+  private func run(_ list: inout [Work], until deadline: Duration, backlog: Bool, sources: [String: UsageSource], now: Date,
+                   into pass: inout Pass) async -> Bool {
+    var first = true
+    while let item = list.first {
+      if Task.isCancelled { return false }
+      if !first && clock() >= deadline { return true }
+      first = false
+      if backlog { report(before: Double(item.modified) / 1000, now: now) }
+      let finished = (try? await read(item, known: sources[item.history.source], deadline: deadline, into: &pass)) ?? true
+      guard finished else { return !Task.isCancelled }
+      if backlog, backfill != nil { backfill?.read += 1 }
+      list.removeFirst()
+    }
+    return true
+  }
+
+  /// Reports each backfill stage that is complete once the work reaches a
+  /// history last changed at `modified` (nil: the work is done). Each is
+  /// reported once.
   private func report(before modified: Double?, now: Date) {
-    while let current = backlog, current.stage <= Self.stages.count {
+    while let current = backfill, current.stage <= Self.stages.count {
       if current.stage < Self.stages.count {
         guard modified.map({ $0 < now.timeIntervalSince1970 - Self.stages[current.stage].seconds }) ?? true else { return }
-        Self.log("usage history read back \(Self.stages[current.stage].name) (\(current.read) histories)")
+        log("usage history read back \(Self.stages[current.stage].name) (\(current.read) histories)")
       } else {
         guard modified == nil else { return }
-        Self.log("usage history read in full (\(current.read) histories)")
+        log("usage history read in full (\(current.read) histories)")
       }
-      backlog = (current.stage + 1, current.read)
+      backfill = (current.stage + 1, current.read)
     }
   }
 
@@ -196,7 +223,7 @@ actor UsageScanner {
 
   /// Reads one history; returns false when the slice ran out part-way and
   /// the place reached was saved.
-  private func read(_ item: Work, known: UsageSource?, deadline: ContinuousClock.Instant, into pass: inout Pass) async throws -> Bool {
+  private func read(_ item: Work, known: UsageSource?, deadline: Duration, into pass: inout Pass) async throws -> Bool {
     switch item.history {
     case .file(let file):
       try await read(file, size: item.size, modified: item.modified, known: known, deadline: deadline, into: &pass)
@@ -347,7 +374,7 @@ actor UsageScanner {
   /// is passed over; what was saved before the failure stays. A line that
   /// is not what its harness writes is skipped on its own. Returns false
   /// when the slice ran out part-way.
-  private func read(_ file: HistoryFile, size: Int64, modified: Int64, known: UsageSource?, deadline: ContinuousClock.Instant,
+  private func read(_ file: HistoryFile, size: Int64, modified: Int64, known: UsageSource?, deadline: Duration,
                     into pass: inout Pass) async throws -> Bool {
     // A file with no complete first line yet is not read yet.
     guard try file.compressed || Self.identity(of: file.url) != nil else { return true }
@@ -368,7 +395,7 @@ actor UsageScanner {
   }
 
   private func readPlain(_ file: HistoryFile, size: Int64, modified: Int64, known: UsageSource?, counted: UsageSource,
-                         deadline: ContinuousClock.Instant, saved: inout UsageSource, into pass: inout Pass) async throws -> Bool {
+                         deadline: Duration, saved: inout UsageSource, into pass: inout Pass) async throws -> Bool {
     guard let identity = try Self.identity(of: file.url) else { return true }
     let handle = try FileHandle(forReadingFrom: file.url)
     defer { try? handle.close() }
@@ -398,11 +425,13 @@ actor UsageScanner {
       }
       // A part-line read past the place is read again from there.
       lines.rewind()
-      let stopped = !end && (Task.isCancelled || ContinuousClock.now >= deadline)
-      saved = UsageSource(id: file.source, offset: lines.offset, size: end ? size : 0, modified: end ? modified : 0,
-                          identity: identity, boundary: lines.boundary, state: try Self.encode(state),
-                          interrupted: end || stopped ? 0 : counted.interrupted)
-      let result = try await library.saveUsage(entries, source: saved)
+      let stopped = !end && (Task.isCancelled || clock() >= deadline)
+      let next = UsageSource(id: file.source, offset: lines.offset, size: end ? size : 0, modified: end ? modified : 0,
+                             identity: identity, boundary: lines.boundary, state: try Self.encode(state),
+                             interrupted: end || stopped ? 0 : counted.interrupted)
+      let result = try await save(entries, next)
+      // The place moves on only once it is saved.
+      saved = next
       pass.found += entries.count
       pass.added += result.added
       pass.records += result.records
@@ -411,19 +440,22 @@ actor UsageScanner {
     }
   }
 
-  /// A compressed rollout is decoded from its start each time, as a stream;
-  /// what lies before the place reached is checked, not read again. A
-  /// stream that does not match the place is read from its start.
+  /// A compressed rollout is decoded from its start each time, as a stream
+  /// read through the file a piece at a time; what lies before the place
+  /// reached is checked, not read again. A stream that does not match the
+  /// place is read from its start. A stop is taken between blocks. If a
+  /// block cannot be decoded, the whole lines before it are saved first.
   private func readCompressed(_ file: HistoryFile, size: Int64, modified: Int64, known: UsageSource?, counted: UsageSource,
-                              deadline: ContinuousClock.Instant, saved: inout UsageSource, into pass: inout Pass) async throws -> Bool {
-    let input = try Data(contentsOf: file.url, options: .alwaysMapped)
+                              deadline: Duration, saved: inout UsageSource, into pass: inout Pass) async throws -> Bool {
     var resume = known.flatMap { known -> (UsageSource, ReaderState)? in
       guard !known.boundary.isEmpty, !known.identity.isEmpty,
             let state = try? JSONDecoder().decode(ReaderState.self, from: Data(known.state.utf8)) else { return nil }
       return (known, state)
     }
     while true {
-      var decoder = Zstd.Decoder(input)
+      let handle = try FileHandle(forReadingFrom: file.url)
+      defer { try? handle.close() }
+      var decoder = Zstd.Decoder { count in try handle.read(upToCount: count) ?? Data() }
       var state = resume?.1 ?? ReaderState()
       model(file, &state)
       var lines = LineReader(offset: 0, limit: chunk, skipUntil: resume?.0.offset ?? 0)
@@ -435,23 +467,51 @@ actor UsageScanner {
         return lines.missed || (lines.reached.map { $0 != resume.0.boundary } ?? false)
           || (head.identity.map { $0 != resume.0.identity } ?? false)
       }
-      while let block = try decoder.next() {
+      /// The place reached, to save with what was read up to it.
+      func place(end: Bool, stopped: Bool) throws -> UsageSource {
+        UsageSource(id: file.source, offset: lines.offset, size: end ? size : 0, modified: end ? modified : 0,
+                    identity: head.identity ?? "", boundary: lines.boundary, state: try Self.encode(state),
+                    interrupted: end || stopped ? 0 : counted.interrupted)
+      }
+      while true {
+        if Task.isCancelled {
+          // Ends the read cleanly; the next one decodes from the start again.
+          if lines.reached != nil, !mismatch {
+            let next = try place(end: false, stopped: true)
+            try await commit(entries, next, into: &pass)
+            saved = next
+          } else {
+            var unchanged = saved
+            unchanged.interrupted = 0
+            try await library.saveUsage([], source: unchanged)
+            saved = unchanged
+          }
+          return false
+        }
+        let block: [UInt8]?
+        do {
+          block = try decoder.next()
+        } catch {
+          if lines.reached != nil, !mismatch, lines.offset > savedAt {
+            let next = try place(end: false, stopped: true)
+            try await commit(entries, next, into: &pass)
+            saved = next
+          }
+          throw error
+        }
+        guard let block else { break }
         block.withUnsafeBytes { bytes in
           head.feed(bytes)
           lines.feed(bytes) { line in entries += HistoryReader.entries(line, kind: file.kind, state: &state) }
         }
         if mismatch { break }
         if lines.reached != nil, lines.offset - savedAt >= Int64(chunk) {
-          let stopped = Task.isCancelled || ContinuousClock.now >= deadline
-          saved = UsageSource(id: file.source, offset: lines.offset, identity: head.identity ?? "", boundary: lines.boundary,
-                              state: try Self.encode(state), interrupted: stopped ? 0 : counted.interrupted)
-          let result = try await library.saveUsage(entries, source: saved)
-          pass.found += entries.count
-          pass.added += result.added
-          pass.records += result.records
+          let stopped = clock() >= deadline
+          let next = try place(end: false, stopped: stopped)
+          try await commit(entries, next, into: &pass)
+          saved = next
           entries = []
           savedAt = lines.offset
-          // The next pass decodes from the start again and goes on from here.
           if stopped { return false }
         }
       }
@@ -464,15 +524,35 @@ actor UsageScanner {
         resume = nil
         continue
       }
-      saved = UsageSource(id: file.source, offset: lines.offset, size: size, modified: modified, identity: head.identity ?? "",
-                          boundary: lines.boundary, state: try Self.encode(state))
-      let result = try await library.saveUsage(entries, source: saved)
-      pass.found += entries.count
-      pass.added += result.added
-      pass.records += result.records
+      let next = try place(end: true, stopped: false)
+      try await commit(entries, next, into: &pass)
+      saved = next
       return true
     }
   }
+
+  /// Saves what one step of a read found with the place it reached.
+  private func commit(_ entries: [UsageEntry], _ next: UsageSource, into pass: inout Pass) async throws {
+    let result = try await save(entries, next)
+    pass.found += entries.count
+    pass.added += result.added
+    pass.records += result.records
+  }
+
+  /// Saves usage with a source's place.
+  private func save(_ entries: [UsageEntry], _ source: UsageSource) async throws -> UsageSaved {
+    if !entries.isEmpty, failingSaves > 0 {
+      failingSaves -= 1
+      throw SaveFailure()
+    }
+    return try await library.saveUsage(entries, source: source)
+  }
+
+  /// For tests: the next saves of responses fail, as on a full disk.
+  private var failingSaves = 0
+  private struct SaveFailure: Error {}
+
+  func failNextSaves(_ count: Int) { failingSaves = count }
 
   /// Grok Build names the session's model in its summary.
   private func model(_ file: HistoryFile, _ state: inout ReaderState) {
@@ -530,7 +610,10 @@ actor UsageScanner {
     /// A line ran past `skipUntil`: it is not a place this stream has.
     private(set) var missed = false
     private var partial: [UInt8] = []
+    /// The line being fed is too long: its bytes are counted, not kept.
     private var skipping = false
+    /// The bytes of the line being fed so far.
+    private var length = 0
     /// The last bytes before `offset`, and the last bytes fed.
     private var tail: [UInt8]
     private var recent: [UInt8]
@@ -551,6 +634,7 @@ actor UsageScanner {
       var start = 0
       while start < bytes.count {
         guard let found = memchr(base + start, 0x0A, bytes.count - start) else {
+          length += bytes.count - start
           if !skipping {
             partial.append(contentsOf: UnsafeRawBufferPointer(rebasing: bytes[start...]))
             if partial.count > limit {
@@ -562,8 +646,9 @@ actor UsageScanner {
         }
         let end = base.distance(to: UnsafeRawPointer(found))
         let piece = UnsafeRawBufferPointer(rebasing: bytes[start..<end])
-        let length = partial.count + piece.count
-        offset += Int64(length + 1)
+        // Every byte of the line, kept or not, and its newline.
+        let whole = length + piece.count
+        offset += Int64(whole + 1)
         tail = end + 1 >= UsageScanner.boundaryLength
           ? Array(bytes[(end + 1 - UsageScanner.boundaryLength)...end])
           : Array((recent + bytes[...end]).suffix(UsageScanner.boundaryLength))
@@ -571,7 +656,7 @@ actor UsageScanner {
           if offset == skipUntil { reached = boundary }
         } else if reached == nil {
           missed = true
-        } else if skipping || length > limit {
+        } else if skipping || whole > limit {
           // Too long for any history to mean: passed over whole.
         } else if partial.isEmpty {
           line(piece)
@@ -581,6 +666,7 @@ actor UsageScanner {
         }
         partial.removeAll(keepingCapacity: partial.count < 1 << 20)
         skipping = false
+        length = 0
         start = end + 1
       }
       recent = bytes.count >= UsageScanner.boundaryLength
@@ -590,25 +676,28 @@ actor UsageScanner {
 
     /// The end of a finished stream: a last line without a newline is whole.
     mutating func finish(_ line: (UnsafeRawBufferPointer) -> Void) {
-      guard !partial.isEmpty || skipping else { return }
-      offset += Int64(partial.count)
+      guard length > 0 else { return }
+      offset += Int64(length)
       tail = recent
       let last = partial
+      let kept = !skipping
       partial.removeAll()
+      skipping = false
+      length = 0
       if offset <= skipUntil {
         if offset == skipUntil { reached = boundary }
       } else if reached == nil {
         missed = true
-      } else if !skipping {
+      } else if kept {
         last.withUnsafeBytes { line($0) }
       }
-      skipping = false
     }
 
     /// Forgets what was fed past the place, to be fed again from there.
     mutating func rewind() {
       partial.removeAll()
       skipping = false
+      length = 0
       recent = tail
     }
   }
@@ -644,12 +733,12 @@ actor UsageScanner {
   private static let openCodeSource = "opencode"
 
   /// OpenCode keeps its history in one database, read on from the last
-  /// message seen, which must still be there. Its size and change time
+  /// message seen, which must still be there, and the hour before it. Its size and change time
   /// include the write-ahead log. Its reads are counted as a file's are;
   /// each page saved moves the place on and keeps the count until the
   /// last, so an interrupted read goes on from that page.
   private func readOpenCode(_ path: String, source: String, size: Int64, modified: Int64, known: UsageSource?,
-                            deadline: ContinuousClock.Instant, into pass: inout Pass) async throws -> Bool {
+                            deadline: Duration, into pass: inout Pass) async throws -> Bool {
     guard let counted = try await begin(known, id: source, size: size, modified: modified) else { return true }
     var saved = counted
     do {
@@ -657,18 +746,20 @@ actor UsageScanner {
       var cursor: (time: Int64, id: String) = (0, "")
       if let known, known.boundary == Self.openCodeBoundary(known.identity),
          try known.identity.isEmpty || HistoryReader.openCodeHas(database, message: known.identity) {
-        cursor = (known.offset, known.identity)
+        // The hour before the place is read again too, so a message whose
+        // update is stamped before its place was saved is not missed.
+        cursor = (max(0, known.offset - Self.openCodeOverlap), "")
       }
       let limit = 500
       while true {
         let page = try HistoryReader.openCode(database, after: cursor, limit: limit)
         let last = page.rows < limit || page.cursor == cursor
         // A stop or the end of the slice ends the read here, to go on at the next pass.
-        let stopped = !last && (Task.isCancelled || ContinuousClock.now >= deadline)
+        let stopped = !last && (Task.isCancelled || clock() >= deadline)
         let next = UsageSource(id: source, offset: page.cursor.time, size: last ? size : 0, modified: last ? modified : 0,
                                identity: page.cursor.id, boundary: Self.openCodeBoundary(page.cursor.id),
                                interrupted: last || stopped ? 0 : counted.interrupted)
-        let result = try await library.saveUsage(page.entries, source: next)
+        let result = try await save(page.entries, next)
         saved = next
         cursor = page.cursor
         pass.found += page.entries.count
@@ -685,6 +776,8 @@ actor UsageScanner {
       return true
     }
   }
+
+  static let openCodeOverlap: Int64 = 3_600_000
 
   /// The boundary of OpenCode's place: the message it is after.
   private static func openCodeBoundary(_ message: String) -> String {

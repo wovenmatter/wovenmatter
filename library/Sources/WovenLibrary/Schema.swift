@@ -385,7 +385,7 @@ public enum Schema {
       // A turn is running. Still set at start, the server stopped mid-turn.
       .integer("turn_running", 0),
       .integer("updated_at", 0),
-    ]),
+    ], indexes: [["runtime", "handle"]]),
     // How far the bots runtime's finished entries are saved here: "bot:<id>"
     // for a bot's conversations, "forum" for the Forum. Kept by the library,
     // not the bots' folder, so bots moved to another machine save their
@@ -435,7 +435,7 @@ public enum Schema {
       // What the history shows here is a response counted under another
       // identifier: this one counts nothing.
       .integer("restated", 0),
-    ], indexes: [["runtime", "native_session"]]),
+    ], indexes: [["runtime", "native_session", "model", "woven", "at"]]),
     // What this machine's scheduler has fired of each entry it owns.
     // `stamp` is the entry's stamp `next_fire_at` was worked out from.
     Table("schedule_state", .local, [

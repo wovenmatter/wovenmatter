@@ -22,8 +22,10 @@ struct ReaderState: Codable, Sendable {
   var provider: String?
   /// Codex: the last cumulative count of the file's `token_count` events.
   var total: [Int64]?
-  /// Codex: the usage of the newest `token_usage_record`s no `token_count`
-  /// has restated yet, at most `unpairedLimit`.
+  /// Codex: the turn the rollout's latest `turn_context` names.
+  var turn: String?
+  /// Codex: the usage of this turn's newest `token_usage_record`s no
+  /// `token_count` has restated yet, at most `unpairedLimit`.
   var unpaired: [[Int64]]?
 }
 
@@ -94,6 +96,7 @@ enum HistoryReader {
       return []
     case "turn_context":
       state.model = text(payload["model"]) ?? state.model
+      codexTurn(text(payload["turn_id"]), &state)
       return []
     case "token_usage_record":
       guard let usage = payload["usage"] as? [String: Any], !usage.isEmpty else { return [] }
@@ -127,20 +130,38 @@ enum HistoryReader {
       if !restates, first, let total, total != usage { return [] }
       guard usage.prefix(5).contains(where: { $0 > 0 }), let stamp = root["timestamp"], let at = date(stamp) else { return [] }
       // Known by its usage and running total, which a copy of it in a forked
-      // thread's history keeps although its time is that of the copy. One
-      // that restates a record is saved as such, so a copy of it elsewhere
-      // counts nothing either.
-      let key = [usage.map(String.init).joined(separator: ","), total.map { $0.map(String.init).joined(separator: ",") } ?? "\(stamp)"]
-      let id = "codex:counted:" + Library.digest(of: Data(key.joined(separator: "\n").utf8)).prefix(32)
-      var entry = codexEntry(id: id, nativeSession: state.owner ?? state.session ?? "", usage: usage, at: at, state)
+      // thread's history keeps although its time is that of the copy. Where
+      // the running total is the usage itself (a thread's first response),
+      // two threads can share both, so the turn its `turn_context` names is
+      // added, and the identifier without it is saved as counting nothing,
+      // for a copy that kept no turn. One that restates a record is saved as
+      // such, so a copy of it elsewhere counts nothing either.
+      let plain = [usage.map(String.init).joined(separator: ","), total.map { $0.map(String.init).joined(separator: ",") } ?? "\(stamp)"]
+      func id(_ key: [String]) -> String { "codex:counted:" + Library.digest(of: Data(key.joined(separator: "\n").utf8)).prefix(32) }
+      let session = state.owner ?? state.session ?? ""
+      var entries: [UsageEntry] = []
+      var entry = codexEntry(id: id(plain), nativeSession: session, usage: usage, at: at, state)
+      if let total, total == usage, let turn = state.turn {
+        var copy = entry
+        copy.restates = true
+        entries.append(copy)
+        entry.id = id(plain + [turn])
+      }
       entry.restates = restates
-      return [entry]
+      return entries + [entry]
     default:
       return []
     }
   }
 
   static let unpairedLimit = 64
+
+  /// A new turn: a record of the last one is restated within it or not at all.
+  private static func codexTurn(_ turn: String?, _ state: inout ReaderState) {
+    guard let turn, turn != state.turn else { return }
+    state.turn = turn
+    state.unpaired = nil
+  }
 
   /// A Codex usage object as its six counts: input (cached and written
   /// included), cached input, cache written, output (reasoning included),
@@ -178,7 +199,9 @@ enum HistoryReader {
 
   /// A turn's usage arrives as an ACP update whose `usage` (or, per model,
   /// `modelUsage`) holds token counts, the model calls they took and the
-  /// cost in ticks of 10⁻¹⁰ dollars. Lines copied from another session keep
+  /// cost in ticks of 10⁻¹⁰ dollars. A turn's own call count is given to
+  /// its model only when it used one; without counts per model each model
+  /// counts one call. Lines copied from another session keep
   /// that session's event ids.
   private static func grok(_ root: [String: Any], session: String, _ state: inout ReaderState) -> [UsageEntry] {
     guard let params = root["params"] as? [String: Any], let update = params["update"] as? [String: Any] else { return [] }
@@ -202,7 +225,7 @@ enum HistoryReader {
                              input: max(0, integer(values["inputTokens"]) - cached - written),
                              output: integer(values["outputTokens"]), cacheRead: cached, cacheWrite: written,
                              cost: (number(values["costUsdTicks"]) ?? 0) / 10_000_000_000,
-                             requests: max(1, integer(values["modelCalls"] ?? usage["modelCalls"])))
+                             requests: max(1, integer(values["modelCalls"] ?? (counts.count == 1 ? usage["modelCalls"] : nil))))
       return entry.input + entry.output + entry.cacheRead + entry.cacheWrite > 0 ? entry : nil
     }
   }

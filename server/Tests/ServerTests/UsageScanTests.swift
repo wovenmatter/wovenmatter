@@ -465,8 +465,129 @@ private func rawFrames(_ data: Data) -> Data {
   try setModified(grown, now.addingTimeInterval(-300 * 86_400))
   let fresh = claudeFile(home, session(9))
   try write([claudeLine("msg_9", session: session(9), at: "2026-01-05T11:00:01.000Z", input: 1, output: 1)], to: fresh)
+  #expect(await scanner.scan().left == 0)
+  #expect(order.withLock { $0 } == [0, 9].map { UsageScanner.source("claude", "/-tmp-example/\(session($0)).jsonl") })
+}
+
+/// A clock that moves on a second each time it is read.
+private func tickingClock() -> @Sendable () -> Duration {
+  let ticks = Mutex(0)
+  return { ticks.withLock { $0 += 1; return .seconds($0) } }
+}
+
+private func manyLines(_ prefix: String, session: String = claudeSession, count: Int) -> [String] {
+  (0..<count).map { claudeLine("\(prefix)_\($0)", session: session, at: "2026-01-05T11:00:01.000Z", input: 1, output: 1) }
+}
+
+/// A history that keeps growing cannot hold up those not read yet: they
+/// have half of every pass.
+@Test func historiesThatGrowLeaveTimeForTheRest() async throws {
+  let home = try temporary("usage-home")
+  let busy = claudeFile(home, session(1))
+  try write(manyLines("first", session: session(1), count: 1), to: busy)
+  let library = try await Library.open(folder: try temporary("usage-library"), machineName: "a")
+  let order = Mutex<[String]>([])
+  let scanner = UsageScanner(library: library, home: home, chunk: 1_000, slice: .seconds(10),
+                             willRead: { source in order.withLock { $0.append(source) } }, clock: tickingClock())
+  #expect(await scanner.scan().left == 0)
+  try append(manyLines("more", session: session(1), count: 200), to: busy)
+  for index in 2...3 { try write(manyLines("waiting", session: session(index), count: 1), to: claudeFile(home, session(index))) }
+  order.withLock { $0.removeAll() }
+  let pass = await scanner.scan()
+  #expect(pass.left == 1)
+  #expect(Set(order.withLock { $0 }).isSuperset(of: (2...3).map { UsageScanner.source("claude", "/-tmp-example/\(session($0)).jsonl") }))
+}
+
+/// A history read only part of the way is still waiting to be read, not one
+/// that grew: one newer than it is read first.
+@Test func aPartlyReadHistoryWaitsItsTurn() async throws {
+  let home = try temporary("usage-home")
+  let old = claudeFile(home, session(1))
+  try write(manyLines("old", session: session(1), count: 200), to: old)
+  try setModified(old, Date().addingTimeInterval(-86_400))
+  let library = try await Library.open(folder: try temporary("usage-library"), machineName: "a")
+  let order = Mutex<[String]>([])
+  let scanner = UsageScanner(library: library, home: home, chunk: 1_000, slice: .seconds(4),
+                             willRead: { source in order.withLock { $0.append(source) } }, clock: tickingClock())
   #expect(await scanner.scan().left == 1)
-  #expect(order.withLock { $0 } == [UsageScanner.source("claude", "/-tmp-example/\(session(0)).jsonl")])
+  try write(manyLines("new", session: session(2), count: 1), to: claudeFile(home, session(2)))
+  order.withLock { $0.removeAll() }
+  await scanner.scan()
+  #expect(order.withLock { $0 }.first == UsageScanner.source("claude", "/-tmp-example/\(session(2)).jsonl"))
+}
+
+/// Each age is reported once as the reading reaches it, also when every
+/// history is recent, and not again while nothing old is waiting.
+@Test func eachStageIsReportedOnce() async throws {
+  let home = try temporary("usage-home")
+  try write(manyLines("one", count: 1), to: claudeFile(home, claudeSession))
+  let library = try await Library.open(folder: try temporary("usage-library"), machineName: "a")
+  let lines = Mutex<[String]>([])
+  let scanner = UsageScanner(library: library, home: home, log: { line in lines.withLock { $0.append(line) } })
+  await scanner.scan()
+  try write(manyLines("two", session: session(2), count: 1), to: claudeFile(home, session(2)))
+  await scanner.scan()
+  let stages = lines.withLock { $0 }.filter { $0.hasPrefix("usage history read") }
+  #expect(stages == ["24 hours", "7 days", "30 days", "90 days"].map { "usage history read back \($0) (1 histories)" }
+            + ["usage history read in full (1 histories)"])
+}
+
+/// A save that fails leaves the place where it was, so nothing read before
+/// the failure is skipped when the history is read again.
+@Test func aFailedSaveKeepsThePlace() async throws {
+  let home = try temporary("usage-home")
+  let file = claudeFile(home, claudeSession)
+  try write(manyLines("msg", count: 3), to: file)
+  let library = try await Library.open(folder: try temporary("usage-library"), machineName: "a")
+  let scanner = UsageScanner(library: library, home: home)
+  await scanner.failNextSaves(1)
+  #expect(await scanner.scan().added == 0)
+  #expect(try await library.usageSources().values.map(\.offset) == [0])
+  try append(manyLines("later", count: 1), to: file)
+  #expect(await scanner.scan().added == 4)
+  #expect(try await totals(library)[.claudeCode]?.requests == 4)
+}
+
+/// A line longer than a read's worth is passed over with every one of its
+/// bytes, so the place after it is where the next line starts.
+@Test func aLineLongerThanAChunkIsPassedOverWhole() async throws {
+  let home = try temporary("usage-home")
+  let file = claudeFile(home, claudeSession)
+  let long = #"{"type":"user","message":"\#(String(repeating: "z", count: 5_000))"}"#
+  try write(manyLines("before", count: 2) + [long] + manyLines("after", count: 2), to: file)
+  let library = try await Library.open(folder: try temporary("usage-library"), machineName: "a")
+  let scanner = UsageScanner(library: library, home: home, chunk: 1_000)
+  #expect(await scanner.scan().added == 4)
+  let size = try FileManager.default.attributesOfItem(atPath: file.path)[.size] as? NSNumber
+  #expect(try await library.usageSources().values.map(\.offset) == [size?.int64Value ?? -1])
+  try append(manyLines("last", count: 1), to: file)
+  let next = await scanner.scan()
+  #expect(next.found == 1 && next.added == 1)
+}
+
+/// A compressed rollout that cannot be decoded part of the way keeps what
+/// was read before the bad block.
+@Test func aCompressedRolloutFailingPartWayKeepsWhatCameBefore() async throws {
+  let home = try temporary("usage-home")
+  let thread = "0000dddd-0000-7000-8000-000000000008"
+  var lines = [#"{"timestamp":"2026-01-05T10:00:00.000Z","type":"session_meta","payload":{"id":"\#(thread)"}}"#]
+  for index in 0..<400 {
+    lines.append(#"{"timestamp":"2026-01-05T10:01:00.000Z","type":"token_usage_record","payload":{"thread_id":"\#(thread)","response_id":"resp_\#(index)","usage":{"input_tokens":10,"output_tokens":2,"total_tokens":12}}}"#)
+  }
+  let plain = Data(lines.map { $0 + "\n" }.joined().utf8)
+  var compressed = rawFrames(plain)
+  // The 41st block of the first frame is given the reserved block type.
+  let bad = 6 + 40 * (3 + 1024)
+  compressed[bad] |= 0x06
+  let before = plain.prefix(40 * 1024).split(separator: 0x0A, omittingEmptySubsequences: false).dropLast()
+  let url = home.appendingPathComponent(".codex/sessions/2026/01/05/rollout-2026-01-05T10-00-00-\(thread).jsonl.zst")
+  try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+  try compressed.write(to: url)
+  let library = try await Library.open(folder: try temporary("usage-library"), machineName: "a")
+  let scanner = UsageScanner(library: library, home: home)
+  await scanner.scan()
+  #expect(try await totals(library)[.codex]?.requests == before.count - 1)
+  #expect(try await library.usageSources().values.allSatisfy { $0.passedOver > 0 })
 }
 
 /// The homes the server's environment names and the Claude app's own
@@ -515,6 +636,19 @@ private func rawFrames(_ data: Data) -> Data {
     HistoryReader.entries($0, kind: .grok(session: session, summary: URL(fileURLWithPath: "/nonexistent")), state: &state)
   }
   #expect(entries.map(\.requests).sorted() == [1, 2] && entries.allSatisfy { $0.at == day.addingTimeInterval(1) })
+
+  // A turn's own count goes to its one model; with several and no counts of
+  // their own, each counts one call.
+  func requests(_ usage: String) -> [Int64] {
+    let line = #"{"timestamp":1767610801,"method":"_x.ai/session/update","params":{"sessionId":"\#(session)","update":{"sessionUpdate":"turn_completed","prompt_id":"p2","usage":\#(usage)},"_meta":{"eventId":"\#(session)-6"}}}"#
+    var state = ReaderState()
+    return Array(line.utf8).withUnsafeBytes {
+      HistoryReader.entries($0, kind: .grok(session: session, summary: URL(fileURLWithPath: "/nonexistent")), state: &state)
+    }.map(\.requests).sorted()
+  }
+  #expect(requests(#"{"inputTokens":10,"outputTokens":1,"modelCalls":3,"modelUsage":{"grok-a":{"inputTokens":6,"outputTokens":1},"grok-b":{"inputTokens":4,"outputTokens":1}}}"#) == [1, 1])
+  #expect(requests(#"{"inputTokens":10,"outputTokens":1,"modelCalls":3,"modelUsage":{"grok-a":{"inputTokens":10,"outputTokens":1}}}"#) == [3])
+  #expect(requests(#"{"inputTokens":10,"outputTokens":1,"modelCalls":3}"#) == [3])
 }
 
 private func codexMeta(_ id: String, at: String = "2026-03-01T10:00:00.000Z") -> String {
@@ -604,4 +738,45 @@ private func codexRecord(at: String, thread: String, response: String, _ usage: 
   #expect(results[0] == results[1])
   #expect(results[0][.codex] == UsageAmounts(input: 100 + 100 + 100 + 400 + 3000 + 90 + 60,
                                              output: 10 + 20 + 40 + 100 + 300 + 9 + 6, cacheRead: 100 + 300 + 600, requests: 7))
+}
+
+private func codexTurn(_ turn: String, at: String) -> String {
+  #"{"timestamp":"\#(at)","type":"turn_context","payload":{"turn_id":"\#(turn)","model":"gpt-old"}}"#
+}
+
+/// Two threads whose first responses used exactly the same tokens are two
+/// responses; a fork's copy of one, with its turn or without, is the same
+/// response. A record left unrestated in one turn is not taken for a
+/// response of the next.
+@Test func olderCodexResponsesAreToldApartByTheirTurn() async throws {
+  let home = try temporary("usage-home")
+  let folder = home.appendingPathComponent(".codex/sessions/2026/03/02")
+  let first = "0000eeee-0000-7000-8000-000000000001", second = "0000eeee-0000-7000-8000-000000000002"
+  let fork = "0000eeee-0000-7000-8000-000000000003"
+  let response = codexCount(at: "2026-03-02T10:01:00.000Z", last: (500, 0, 50), total: (500, 0, 50))
+  try write([codexMeta(first, at: "2026-03-02T10:00:00.000Z"), codexTurn("turn-first", at: "2026-03-02T10:00:01.000Z"), response],
+            to: folder.appendingPathComponent("rollout-2026-03-02T10-00-00-\(first).jsonl"))
+  try write([codexMeta(second, at: "2026-03-02T11:00:00.000Z"), codexTurn("turn-second", at: "2026-03-02T11:00:01.000Z"),
+             response.replacingOccurrences(of: "10:01:00", with: "11:01:00")],
+            to: folder.appendingPathComponent("rollout-2026-03-02T11-00-00-\(second).jsonl"))
+  // The fork copies the first thread's turn as it was, stamped with its own time.
+  try write([codexMeta(fork, at: "2026-03-02T12:00:00.000Z"), codexTurn("turn-first", at: "2026-03-02T12:00:00.000Z"),
+             response.replacingOccurrences(of: "10:01:00", with: "12:00:00")],
+            to: folder.appendingPathComponent("rollout-2026-03-02T12-00-00-\(fork).jsonl"))
+  // Another copies it without its turn.
+  let bare = "0000eeee-0000-7000-8000-000000000005"
+  try write([codexMeta(bare, at: "2026-03-02T12:30:00.000Z"), response.replacingOccurrences(of: "10:01:00", with: "12:30:00")],
+            to: folder.appendingPathComponent("rollout-2026-03-02T12-30-00-\(bare).jsonl"))
+  // A record no event restates, then the next turn's response of the same size.
+  let leftover = "0000eeee-0000-7000-8000-000000000004"
+  try write([codexMeta(leftover, at: "2026-03-02T13:00:00.000Z"), codexTurn("turn-a", at: "2026-03-02T13:00:01.000Z"),
+             codexRecord(at: "2026-03-02T13:01:00.000Z", thread: leftover, response: "resp_a", (70, 0, 7)),
+             codexTurn("turn-b", at: "2026-03-02T13:02:00.000Z"),
+             codexCount(at: "2026-03-02T13:03:00.000Z", last: (70, 0, 7), total: (70, 0, 7))],
+            to: folder.appendingPathComponent("rollout-2026-03-02T13-00-00-\(leftover).jsonl"))
+  let library = try await Library.open(folder: try temporary("usage-library"), machineName: "a")
+  await UsageScanner(library: library, home: home).scan()
+  let groups = try await library.usage(from: .distantPast, to: .distantFuture, periodSeconds: 3600).groups
+  func requests(_ thread: String) -> Int { groups.filter { $0.nativeSessionID == thread }.reduce(0) { $0 + $1.amounts.requests } }
+  #expect(requests(first) == 1 && requests(second) == 1 && requests(fork) == 0 && requests(bare) == 0 && requests(leftover) == 2)
 }
