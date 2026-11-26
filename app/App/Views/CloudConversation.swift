@@ -186,7 +186,7 @@ struct CloudConversation: View {
                     releaseHeldRow()
                     transcriptOwnsScroll = false
                     scrollState.setNearBottom(true)
-                    scrollToConversationBottom(using: proxy)
+                    scrollToEnd()
                 }
                 // `work:open` and `work:fold` open or fold the work of every settled turn.
                 .debugCommand("work:") { action in
@@ -201,13 +201,15 @@ struct CloudConversation: View {
                     draft = text
                     Task { @MainActor in
                         await Task.yield()
-                        onSend()
+                        sendFromComposer()
                     }
                 }
                 // `status:PATH` writes whether this chat's turn is still running.
                 .debugCommand("status:") { path in
                     let running = session?.isRunning == true
-                    let text = "{\"chat\":\"\(conversation?.id ?? "")\",\"running\":\(running)}"
+                    // How far the end is below what shows, and whether the transcript follows it.
+                    let text = "{\"chat\":\"\(conversation?.id ?? "")\",\"running\":\(running)," +
+                        "\"endDistance\":\(Int(lastEndDistance)),\"following\":\(followsBottom)}"
                     try? text.write(toFile: path.trimmingCharacters(in: .whitespaces), atomically: true, encoding: .utf8)
                 }
                 // `scroll-y:POINTS` sets the offset, as a reader scrolling away would.
@@ -256,9 +258,6 @@ struct CloudConversation: View {
                 }
                 // Back from paging history, a library jump or a reader's
                 // scroll, still following: make up for anything missed meanwhile.
-                .onChange(of: followsBottom) { _, follows in
-                    if follows, lastEndDistance > 0 { scrollToEndUnlessAsked() }
-                }
                 .onScrollGeometryChange(for: CGFloat.self) { geometry in
                     // The offset as `scrollTo(y:)` takes it.
                     geometry.contentOffset.y + geometry.contentInsets.top
@@ -274,7 +273,7 @@ struct CloudConversation: View {
                     releaseHeldRow()
                     transcriptOwnsScroll = false
                     scrollState.setNearBottom(true)
-                    scrollToConversationBottom(using: proxy)
+                    scrollToEnd()
                 }
             }
             .simultaneousGesture(TapGesture().onEnded(onActivatePanel))
@@ -496,15 +495,7 @@ struct CloudConversation: View {
                 return onDropFiles(urls)
             },
             onCommandNavigation: onCommandNavigation,
-            onSend: {
-                guard conversation?.isArchived != true else { return }
-                releaseHeldRow()
-                transcriptOwnsScroll = false
-                isUserScrolling = false
-                scrollState.setNearBottom(true)
-                scroll { $0.scrollTo(id: chatEndID, anchor: .bottom) }
-                onSend()
-            },
+            onSend: { sendFromComposer() },
             onStop: session.flatMap { session in
                 guard !isReadOnly, session.isRunning else { return nil }
                 return { Task { await session.stop() } }
@@ -587,14 +578,26 @@ struct CloudConversation: View {
         transcriptPosition.wrappedValue = position
     }
 
-    /// Asks for the end only when nothing has asked for it yet. A second
-    /// target for the same end (the bottom edge beside Latest reply's end
-    /// row), set while SwiftUI is still resolving the first, never settles:
-    /// the scroll view keeps laying out between the two and the app hangs.
-    private func scrollToEndUnlessAsked() {
-        let target = transcriptPosition.wrappedValue
-        guard target.edge != .bottom, target.viewID(type: String.self) != chatEndID else { return }
+    /// The one way the app puts the view at the end (Latest reply, send,
+    /// following): the bottom edge, asked again whenever the end has moved
+    /// while following. One request per action: a second scroll target set
+    /// inside the update the first one started (as a change of follow intent
+    /// used to) left SwiftUI resolving between them forever, and the app
+    /// hung. No end row or proxy scroll beside it, and no measured offset,
+    /// which chases a lazy stack's estimate of its own height.
+    private func scrollToEnd() {
         scroll { $0.scrollTo(edge: .bottom) }
+    }
+
+    /// What the composer's Send does, and the debug `send:` with it.
+    private func sendFromComposer() {
+        guard conversation?.isArchived != true else { return }
+        releaseHeldRow()
+        transcriptOwnsScroll = false
+        isUserScrolling = false
+        scrollState.setNearBottom(true)
+        scrollToEnd()
+        onSend()
     }
 
     private var chatEndID: String {
@@ -695,7 +698,7 @@ struct CloudConversation: View {
         }
         // Back at the live edge, the bottom holds instead.
         if after.distance <= Self.liveEdgeTolerance, !isPrependingHistory, heldRowID != nil { releaseHeldRow() }
-        if followsBottom, resized, after.distance > 0 { scrollToEndUnlessAsked() }
+        if followsBottom, resized, after.distance > 0 { scrollToEnd() }
     }
 
     /// The reader moved the view: at the live edge it follows again, away from it it stays where they put it.
@@ -814,10 +817,6 @@ struct CloudConversation: View {
         }
     }
 
-    private func scrollToConversationBottom(using proxy: ScrollViewProxy) {
-        scroll { $0.scrollTo(id: chatEndID, anchor: .bottom) }
-        scrollWithoutAnimation(proxy, to: chatEndID, anchor: .bottom)
-    }
 }
 
 func nonemptyString(_ value: String?) -> String? {
@@ -1075,3 +1074,4 @@ private struct TranscriptIdentity: Hashable {
     let conversationID: String?
     let hasLoaded: Bool
 }
+
