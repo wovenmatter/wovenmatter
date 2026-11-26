@@ -64,6 +64,9 @@ struct CloudConversation: View {
     /// gives way to it.
     @State private var scrollGeneration = 0
     @State private var isUserScrolling = false
+    /// Counts put-back requests that have waited for the layout that queued
+    /// them to end; each runs against whatever the transcript is then.
+    @State private var endRepairs = 0
     @State private var libraryHighlightID: String?
     @State private var attachmentOpenError: String?
     @State private var choosingFolder = false
@@ -266,8 +269,13 @@ struct CloudConversation: View {
                         // the latest reply stays in view; a tap that moved
                         // nothing decides nothing.
                         readerMoved(to: end)
+                    } else if wasScrolling, !isUserScrolling {
+                        // A touch that moved nothing leaves following as it was,
+                        // and the end it may have kept from being put back.
+                        restoreEndAfterLayout()
                     }
                 }
+                .onChange(of: endRepairs) { repairEnd() }
                 .onScrollGeometryChange(for: TranscriptEnd.self) { geometry in
                     TranscriptEnd(geometry)
                 } action: { before, after in
@@ -730,8 +738,14 @@ struct CloudConversation: View {
         measured.endDistance = after.distance
         let resized = after.contentHeight != before.contentHeight || after.viewportHeight != before.viewportHeight
         if resized { measured.resizes += 1 }
-        if !isUserScrolling, !resized, !isPrependingHistory, after.offset != before.offset,
-           after.distance > before.distance || after.distance <= Self.liveEdgeTolerance {
+        // The view moving with no scroll phase is the reader (keyboard, wheel
+        // without phases, accessibility): when nothing resized, any move away
+        // from the end or onto it; when something resized too, a move that
+        // left the end further away, which keeping the bottom never does (it
+        // moves the view with the end, or, when it cannot, not at all).
+        let movedAway = after.distance > max(before.distance, Self.liveEdgeTolerance)
+        if !isUserScrolling, !isPrependingHistory, after.offset != before.offset,
+           resized ? movedAway : (after.distance > before.distance || after.distance <= Self.liveEdgeTolerance) {
             readerMoved(to: after)
         }
         // Back at the live edge, the bottom holds instead.
@@ -739,21 +753,27 @@ struct CloudConversation: View {
         if followsBottom, resized, after.distance > 0 { restoreEndAfterLayout() }
     }
 
-    /// Puts the end back after this layout, not inside it: at most once for
-    /// each change of content or viewport size, and only if, by then, the
-    /// same transcript still shows, still follows, and still has its end out
-    /// of view. Growth after that is a new change, so it is followed too.
+    /// Puts the end back after this layout, not inside it. The request only
+    /// waits for the layout to end; what it does is decided then, from the
+    /// transcript as it is (see `repairEnd`), never from the one that asked.
     private func restoreEndAfterLayout() {
         guard !measured.restoreQueued else { return }
         measured.restoreQueued = true
-        let identity = transcriptIdentity
         Task { @MainActor in
             measured.restoreQueued = false
-            guard identity == measured.shown, followsBottom, measured.endDistance > 0,
-                  measured.restoredResize != measured.resizes else { return }
-            measured.restoredResize = measured.resizes
-            scrollToEnd()
+            endRepairs &+= 1
         }
+    }
+
+    /// Puts the end back if the transcript showing now follows it, has it out
+    /// of view and is not being scrolled by the reader: at most once for each
+    /// change of content or viewport size, so it cannot repeat itself. A
+    /// request that finds the reader scrolling does nothing; their scroll
+    /// ending asks again.
+    private func repairEnd() {
+        guard followsBottom, measured.endDistance > 0, measured.restoredResize != measured.resizes else { return }
+        measured.restoredResize = measured.resizes
+        scrollToEnd()
     }
 
     /// The reader moved the view: at the live edge it follows again, away from it it stays where they put it.
