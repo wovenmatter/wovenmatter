@@ -1289,20 +1289,30 @@ private enum ConversationResponseAttributedText {
                     append(NSAttributedString(string: "", attributes: [.font: body]), style: gap)
                 }
                 let start = output.length
+                // Cells are rendered once for each way of keeping code together,
+                // and their limits measured once, whatever widths are tried.
+                var renderedCells: [String: [[NSMutableAttributedString]]] = [:]
                 func cellTexts(_ code: CellCode, keeping kept: Set<String> = []) -> [[NSMutableAttributedString]] {
-                    ([table.header] + table.rows).enumerated().map { rowIndex, cells in
+                    let key = "\(code) " + kept.sorted().joined(separator: "\u{1F}")
+                    if let known = renderedCells[key] { return known }
+                    let rows = ([table.header] + table.rows).enumerated().map { rowIndex, cells in
                         table.header.indices.map { column in
                             inline(cells.indices.contains(column) ? cells[column] : .init(""),
                                    font: font(13, rowIndex == 0 ? .semibold : .regular), inCell: true, cellCode: code, keeping: kept)
                         }
                     }
+                    renderedCells[key] = rows
+                    return rows
                 }
+                var measuredLimits: [String: (most: [CGFloat], least: [CGFloat])] = [:]
                 // The usual automatic table layout: each column is at least
                 // its longest unbreakable run (up to a limit) and at most its
                 // width on one line. If every column fits on one line, it
                 // gets that (stretched to the full width when nearly there); otherwise each gets its least, and the room left
                 // is shared in proportion to how much more each would take.
                 func limits(_ rows: [[NSMutableAttributedString]], keepingShortCells: Bool = true) -> (most: [CGFloat], least: [CGFloat]) {
+                    let key = "\(ObjectIdentifier(rows[0][0]).hashValue) \(keepingShortCells)"
+                    if let known = measuredLimits[key] { return known }
                     let most = table.header.indices.map { column in
                         max(1, rows.map { ceil($0[column].size().width) + 1 }.max() ?? 1)
                     }
@@ -1318,6 +1328,7 @@ private enum ConversationResponseAttributedText {
                         let word = min(Prose.tableColumnMinimumLimit, runs.map(\.word).max() ?? 1)
                         return min(most[column], max(kept, word))
                     }
+                    measuredLimits[key] = (most, least)
                     return (most, least)
                 }
                 // In a narrow column cells keep less padding, so their text gets the room.
@@ -1447,7 +1458,7 @@ private enum ConversationResponseAttributedText {
                 let choice: Choice
                 if limits(whole).most.reduce(0, +) <= available {
                     choice = (.whole, [], columnWidths(whole))
-                } else if let known = Self.tableChoices[Self.tableChoiceKey(whole, width: width, indent: indent)] {
+                } else if let known = Self.tableChoices[Self.tableChoiceKey(whole, width: width, indent: indent, size: font(13).pointSize)] {
                     choice = known
                 } else {
                     // Too narrow for the table's natural width. Of the ways
@@ -1488,7 +1499,8 @@ private enum ConversationResponseAttributedText {
                         // The split's shares with code kept whole again, from the other columns.
                         if wholeFits { for widths in fitting(splitWidths, whole) { consider((.whole, [], widths)) } }
                         // Then each broken span kept whole in turn, shortest
-                        // first, where that is no taller.
+                        // first, where that is no taller: the shortest few, so
+                        // a long table costs a few layouts, not one per command.
                         if var current = best, current.broken > 0, current.choice.code != .whole {
                             var spans: [String] = []
                             for row in table.rows {
@@ -1501,7 +1513,7 @@ private enum ConversationResponseAttributedText {
                             }
                             let code = monospaced(Prose.cellCodeSize)
                             func spanWidth(_ span: String) -> CGFloat { (span as NSString).size(withAttributes: [.font: code]).width }
-                            for span in spans.sorted(by: { spanWidth($0) < spanWidth($1) }) {
+                            for span in spans.sorted(by: { spanWidth($0) < spanWidth($1) }).prefix(Prose.tableSpansTriedWhole) {
                                 let kept = current.choice.kept.union([span])
                                 for widths in fitting(current.choice.widths, cellTexts(current.choice.code, keeping: kept)) {
                                     consider((current.choice.code, kept, widths))
@@ -1511,7 +1523,7 @@ private enum ConversationResponseAttributedText {
                         }
                     }
                     choice = best?.choice ?? (splitCode, [], splitWidths)
-                    Self.rememberTableChoice(choice, for: Self.tableChoiceKey(whole, width: width, indent: indent))
+                    Self.rememberTableChoice(choice, for: Self.tableChoiceKey(whole, width: width, indent: indent, size: font(13).pointSize))
                 }
                 tableCells(cellTexts(choice.code, keeping: choice.kept), choice.widths)
                 decorate(.responseTable, from: start, indent: indent)
@@ -1568,8 +1580,8 @@ private enum ConversationResponseAttributedText {
     }
 
     /// A table's cells (their text, and where their code runs) and the width it is laid out at.
-    private static func tableChoiceKey(_ rows: [[NSMutableAttributedString]], width: CGFloat, indent: CGFloat) -> String {
-        var key = "\(width) \(indent) \((rows.first?.first?.attribute(.font, at: 0, effectiveRange: nil) as? NSFont)?.pointSize ?? 0)"
+    private static func tableChoiceKey(_ rows: [[NSMutableAttributedString]], width: CGFloat, indent: CGFloat, size: CGFloat) -> String {
+        var key = "\(width) \(indent) \(size)"
         for row in rows {
             for cell in row {
                 key += "\u{1F}"

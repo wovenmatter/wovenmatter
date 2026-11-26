@@ -382,7 +382,7 @@ private extension ConversationMarkdownDocument {
                     add(text)
                     seeds[seeds.count - 1].fence = Self.fenceOpening(text)
                 } else if let owner = owner(accepting: Self.leadingIndent(line)) {
-                    if pendingBlankLines == 0 {
+                    if pendingBlankLines == 0, Self.endsInParagraph(seeds[seeds.count - 1].content) {
                         // A lazy line continues the paragraph it follows.
                         add(text)
                     } else {
@@ -595,6 +595,13 @@ private extension ConversationMarkdownDocument {
                 return false
             }
             return compact.allSatisfy { $0 == marker }
+        }
+
+        /// Whether `content` ends in a paragraph a lazy line can continue.
+        private static func endsInParagraph(_ content: String) -> Bool {
+            var parser = Parser(content)
+            if case .paragraph = parser.parse().last { return true }
+            return false
         }
 
         /// `line` without up to `columns` of its leading spaces and tabs.

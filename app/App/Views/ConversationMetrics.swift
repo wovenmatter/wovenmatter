@@ -98,6 +98,9 @@ enum ConversationMetrics {
         static let tableFillShare: CGFloat = 0.75
         /// Inline code up to this many characters keeps together in a table cell.
         static let unbreakableCodeLength = 28
+        /// A narrow table that breaks code tries keeping this many of its
+        /// shortest broken spans whole, so its search stays a few layouts.
+        static let tableSpansTriedWhole = 4
         /// Inline code in prose up to this many characters moves to the next
         /// line whole rather than break, when a line can hold it.
         static let proseCodeOnOneLine = 24
