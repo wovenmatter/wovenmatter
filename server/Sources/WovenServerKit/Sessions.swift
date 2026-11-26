@@ -641,10 +641,14 @@ actor SessionHost {
     case .messageFinished:
       await saving { try await self.finishAssistant() }
     case .tool(let callID, let reported, let finished):
-      let call = VisualReplies.withoutVisualReply(reported)
+      var call = VisualReplies.withoutVisualReply(reported)
       if call.kind != .thinking { turnActed = true }
       await saving { try await self.finishAssistant() }
       if let id = toolItemIDs[callID] {
+        // It keeps the time it started through every update, into the saved item.
+        if let item = inProgress.first(where: { $0.id == id }), case .toolCall(let started) = item.content {
+          call.startedAt = started.startedAt
+        }
         let whole = withOutput(call, of: id)
         if finished {
           toolItemIDs[callID] = nil
@@ -658,6 +662,9 @@ actor SessionHost {
         if finished {
           await saving { try await self.finish(.toolCall(call), id: id) }
         } else {
+          // A call seen starting carries when it started; one that arrives
+          // already finished has no start time.
+          call.startedAt = Date()
           let item = LiveItem(id: id, content: .toolCall(call))
           toolItemIDs[callID] = id
           inProgress.append(item)

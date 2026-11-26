@@ -293,9 +293,13 @@ public struct ToolCall: Codable, Sendable, Hashable {
   public var calls: [ToolCall]?
   /// The questions a `.question` call asked, in order.
   public var questions: [ToolQuestion]?
+  /// When the call started, set by the server that ran it. A call that
+  /// arrived already finished has none.
+  public var startedAt: Date?
 
   public init(name: String, input: String, output: String? = nil, failed: Bool = false, title: String? = nil,
-              kind: ToolKind? = nil, plan: [PlanEntry]? = nil, calls: [ToolCall]? = nil, questions: [ToolQuestion]? = nil) {
+              kind: ToolKind? = nil, plan: [PlanEntry]? = nil, calls: [ToolCall]? = nil, questions: [ToolQuestion]? = nil,
+              startedAt: Date? = nil) {
     self.name = name
     self.input = input
     self.output = output
@@ -305,6 +309,7 @@ public struct ToolCall: Codable, Sendable, Hashable {
     self.plan = plan
     self.calls = calls
     self.questions = questions
+    self.startedAt = startedAt
   }
 }
 

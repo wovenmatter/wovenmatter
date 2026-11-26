@@ -176,6 +176,25 @@ func aSteerTheRuntimeAnswersAfterAWovenToolCallLetsThatCallThrough() async throw
 }
 
 @Test(.timeLimit(.minutes(1)))
+func aCallIsSavedWithWhenItStartedEvenWhenWhatItMadeIsSavedFirst() async throws {
+  let machine = try await TestServer.start(runtime: StandInRuntime())
+  defer { machine.server.stopLater() }
+  let client = try await machine.connect()
+  let session = try await client.call(CreateSession(runtime: StandInRuntime.kind, title: "Chat"))
+  let arguments = String(decoding: try Wire.encoder.encode(JSONValue.object(["html": .string("<title>Chart</title><p>bars</p>")])),
+                         as: UTF8.self)
+  try await turn(client, session.id, "code woven render_html \(arguments)")
+
+  let items = try await client.call(SessionItems(sessionID: session.id))
+  let reply = items.first { if case .visualReply = $0.content { true } else { false } }
+  let script = items.first { if case .toolCall(let call) = $0.content { call.kind == .code } else { false } }
+  guard let reply, let script, case .toolCall(let call) = script.content else { Issue.record("no reply or script"); return }
+  // Saved when it finished, after the reply it made, and stamped with its start, before it.
+  #expect(reply.sequence < script.sequence)
+  #expect(call.startedAt.map { $0 <= reply.createdAt } == true)
+}
+
+@Test(.timeLimit(.minutes(1)))
 func aTurnTheRuntimeStartsItselfRunsAndIsSavedWithoutAnotherMessage() async throws {
   let machine = try await TestServer.start(runtime: StandInRuntime())
   defer { machine.server.stopLater() }

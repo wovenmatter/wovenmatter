@@ -58,9 +58,6 @@ final class SessionStore {
     private var run: RunState = .idle
     @ObservationIgnored private var items: [SessionItem] = []
     @ObservationIgnored private var inProgress: [LiveItem] = []
-    /// The places each session's items first showed in, kept while the app
-    /// runs, so a chat opened again shows its rows where they were.
-    private static var places: [String: SessionItemPlaces] = [:]
     /// Where the drawn part of each streaming reply or thinking trace ends, in UTF-8 bytes.
     @ObservationIgnored private var readyEnds: [String: Int] = [:]
     /// Each text item in progress: the reply that shows it, and that reply's text before it.
@@ -630,10 +627,15 @@ final class SessionStore {
         var liveReplies: [String: (messageID: String, before: String)] = [:]
         var runs: [WorkspaceRunRecord] = []
         var activities: [WorkspaceRunActivityRecord] = []
-        let entries = Self.places[sessionID, default: SessionItemPlaces()].ordered(
-            saved: items.map { (id: $0.id, sequence: $0.sequence,
-                                value: (id: $0.id, date: $0.createdAt, content: $0.content, live: false, author: $0.author)) },
-            live: inProgress.map { (id: $0.id, value: (id: $0.id, date: Date(), content: $0.content, live: true, author: ItemAuthor?.none)) })
+        func started(_ content: ItemContent) -> Date? { if case .toolCall(let call) = content { call.startedAt } else { nil } }
+        let entries = sessionItemOrder(
+            items.sorted { $0.sequence < $1.sequence }.map {
+                (started: started($0.content), finished: $0.createdAt,
+                 value: (id: $0.id, date: $0.createdAt, content: $0.content, live: false, author: $0.author))
+            } + inProgress.map {
+                (started: started($0.content), finished: Date?.none,
+                 value: (id: $0.id, date: Date(), content: $0.content, live: true, author: ItemAuthor?.none))
+            })
         var goneNotice: String?
         /// The runs holding an item in progress.
         var liveRuns: Set<Int> = []
@@ -780,24 +782,26 @@ final class SessionStore {
     }
 }
 
-/// Where each item a session showed in progress keeps its place: after the
-/// saved item that was last when it first showed, in the order items
-/// started. Items are saved in the order they finish, so a finished item
-/// would otherwise jump ahead of items still running that showed before it,
-/// out of the rows it followed and into a group it was never next to.
-/// Items never seen in progress follow their sequence.
-struct SessionItemPlaces {
-    private var places: [String: (after: Int, rank: Int)] = [:]
-
-    mutating func ordered<Value>(saved: [(id: String, sequence: Int, value: Value)], live: [(id: String, value: Value)]) -> [Value] {
-        let lastSaved = saved.map(\.sequence).max() ?? 0
-        for item in live where places[item.id] == nil {
-            places[item.id] = (lastSaved, places.count)
+/// A session's items in the order they started. Items are saved in the
+/// order they finish, so a call that ran while others finished (a tool a
+/// reply was written beside, a script whose visual reply was saved first)
+/// would otherwise show after them. Saved items come by sequence, then the
+/// items in progress in the server's order; then each item with a start
+/// time, in that order, moves up past the items before it that started
+/// later: one with a start time by that time, one without by when it
+/// finished. Only items with a start time move, so items without one never
+/// change order among themselves, and a session with none is shown as it
+/// was saved. An item in progress without a start time (a reply being
+/// written) stays last.
+func sessionItemOrder<Value>(_ items: [(started: Date?, finished: Date?, value: Value)]) -> [Value] {
+    var ordered = items.filter { $0.started != nil || $0.finished != nil }
+    for index in ordered.indices {
+        guard let started = ordered[index].started else { continue }
+        var place = index
+        while place > 0, let before = ordered[place - 1].started ?? ordered[place - 1].finished, before > started {
+            ordered.swapAt(place, place - 1)
+            place -= 1
         }
-        func place(_ id: String, _ sequence: Int) -> (Int, Int, Int) {
-            places[id].map { ($0.after, 1, $0.rank) } ?? (sequence, 0, 0)
-        }
-        return (saved.map { (place($0.id, $0.sequence), $0.value) } + live.map { (place($0.id, .max), $0.value) })
-            .sorted { $0.0 < $1.0 }.map(\.1)
     }
+    return (ordered + items.filter { $0.started == nil && $0.finished == nil }).map(\.value)
 }
