@@ -564,7 +564,7 @@ public enum ConversationToolAction: Hashable, Sendable {
     case .search: plural ? "Ran \(count) \(namingSearch ? "other " : "")searches" : namingSearch ? "Ran another search" : "Searched"
     case .list: "Listed \(count) \(plural ? "folders" : "folder")"
     case .visual: "Showed \(count) visual \(plural ? "replies" : "reply")"
-    case .preview: "Previewed \(count) visual \(plural ? "replies" : "reply")"
+    case .preview: plural ? "Ran \(count) previews" : "Previewed a visual reply"
     case .webSearch: plural ? "Ran \(count) web searches" : "Searched the web"
     case .webFetch: "Fetched \(count) web \(plural ? "pages" : "page")"
     case .browser: plural ? "Took \(count) browser steps" : "Used the browser"
@@ -1113,7 +1113,9 @@ extension String {
 
   // A value: quoted whole, or quoted and still open where the text was cut,
   // or up to the next space or quote.
-  private static let workTimelineCredentialValue = #"(?:'[^']*'|"[^"]*"|'[^']*$|"[^"]*$|[^\s&'"“”‘’]+)"#
+  // A double-quoted value runs past escaped characters (`\"`) to its closing
+  // quote, or to the cut.
+  private static let workTimelineCredentialValue = #"(?:'[^']*'|'[^']*$|"(?:[^"\\]|\\.)*(?:"|\\?$)|[^\s&'"“”‘’]+)"#
   // A name that is a credential's whole name or ends in one (`GITHUB_TOKEN`,
   // `api_key`, `password`, `--oauth2-bearer`), never a word that merely
   // contains one (`key`, `max-tokens`).
@@ -1124,8 +1126,9 @@ extension String {
   // `Basic` and `Bearer` are masked as part of an authorization header's
   // value, never on their own (`echo basic info`).
   private static let workTimelineCredentialPatterns: [(NSRegularExpression, String)] = [
-    (#"(?i)\b(authorization|proxy-authorization|x-api-key|api-key|cookie)(\s*:\s*)(?:"[^"]*"?|'[^']*'?|[^'"“”\n]+)"#, "$1$2…"),
-    (#"(?<!\S)(-u|--user)(\s+|=)(?:'[^':]*:[^']*'?|"[^":]*:[^"]*"?|[^\s'"]+:[^\s'"]+)"#, "$1$2…"),
+    (#"(?i)\b(authorization|proxy-authorization|x-api-key|api-key|cookie)(\s*:\s*)(?:"(?:[^"\\]|\\.)*(?:"|\\?$)|'[^']*'?|[^'"“”\n]+)"#,
+     "$1$2…"),
+    (#"(?<!\S)(-u|--user)(\s+|=)(?:'[^':]*:[^']*'?|"(?:[^"\\:]|\\.)*:(?:[^"\\]|\\.)*(?:"|\\?$)|[^\s'"]+:[^\s'"]+)"#, "$1$2…"),
     (#"(?i)(?<!\S)(--?(?:[a-z0-9]+-)*"# + workTimelineCredentialName + #")(\s+)(?!-)"# + workTimelineCredentialValue, "$1$2…"),
     (#"(?i)(?<![A-Za-z0-9_.-])((?:[A-Za-z0-9_.-]*[_.-])?"# + workTimelineCredentialName + ")=" + workTimelineCredentialValue, "$1=…"),
     (#"(?i)\b([a-z][a-z0-9+.-]*://)[^/\s@?#]+@"#, "$1…@"),
