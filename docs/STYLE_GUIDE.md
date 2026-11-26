@@ -523,7 +523,8 @@ when an intentional design change is accepted.
   code, tables and quotes keep the same space on each side and start at their
   block's indent. A code line that wraps continues two cells right of its own
   indent, never past half the box, after a quiet wrap mark drawn in that
-  indent. Inline code is shaded around its own text on each line, a
+  indent. Short inline code in prose moves to the next line whole rather
+  than break, unless no line could hold it. Inline code is shaded around its own text on each line, a
   little smaller than the text it sits in, in a table cell too. Table
   columns fit their content, never narrower than short code or a short value
   they keep whole; a table nearly as wide as the text fills it, and one too

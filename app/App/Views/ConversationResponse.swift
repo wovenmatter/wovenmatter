@@ -748,7 +748,7 @@ final class ConversationResponseNativeTextView: NSTextView, NSTextViewDelegate, 
                   let code = text.attribute(.font, at: first, effectiveRange: nil) as? NSFont, code.isFixedPitch else { continue }
             let font = NSFont.systemFont(ofSize: (code.pointSize * 0.85).rounded())
             let mark = NSAttributedString(string: "↪", attributes: [
-                .font: font, .foregroundColor: WovenColors.foreground.withAlphaComponent(0.3)])
+                .font: font, .foregroundColor: WovenColors.foreground.withAlphaComponent(0.5 * (appliedStyle?.inkOpacity ?? 1))])
             let size = mark.size()
             let textStart = layoutManager.lineFragmentUsedRect(forGlyphAt: line.location, effectiveRange: nil).minX
             let baseline = fragment.minY + layoutManager.location(forGlyphAt: line.location).y
@@ -823,11 +823,11 @@ final class ConversationResponseNativeTextView: NSTextView, NSTextViewDelegate, 
     }
 
     func layoutManager(_ layoutManager: NSLayoutManager, shouldBreakLineByWordBeforeCharacterAt charIndex: Int) -> Bool {
-        ResponseLineBreaks.allowsBreak(in: layoutManager.textStorage, before: charIndex)
+        ResponseLineBreaks.allowsBreak(in: layoutManager, before: charIndex)
     }
 
     func layoutManager(_ layoutManager: NSLayoutManager, shouldBreakLineByHyphenatingBeforeCharacterAt charIndex: Int) -> Bool {
-        ResponseLineBreaks.allowsBreak(in: layoutManager.textStorage, before: charIndex)
+        ResponseLineBreaks.allowsBreak(in: layoutManager, before: charIndex)
     }
 
     /// Text that changes keeps its links to files that have chips.
@@ -866,10 +866,12 @@ final class ConversationResponseNativeTextView: NSTextView, NSTextViewDelegate, 
 }
 
 
-/// How short inline code keeps together: whole (in a table cell), or only
-/// between its spaces.
+/// How short inline code keeps together: whole (in a table cell); on one
+/// line when a line can hold it, else between its spaces (short code in
+/// prose); or only between its spaces.
 private enum ResponseNoBreak: Int {
     case whole
+    case line
     case words
 }
 
@@ -880,21 +882,34 @@ private final class ResponseLineBreaks: NSObject, @preconcurrency NSLayoutManage
     static let shared = ResponseLineBreaks()
 
     /// Lines do not break inside text kept together, except after a space in
-    /// text kept together only by its words.
-    static func allowsBreak(in text: NSAttributedString?, before charIndex: Int) -> Bool {
-        guard let text, charIndex > 0, charIndex < text.length,
+    /// text kept together only by its words, or in short code wider than the
+    /// line it would move to.
+    static func allowsBreak(in layoutManager: NSLayoutManager, before charIndex: Int) -> Bool {
+        guard let text = layoutManager.textStorage, charIndex > 0, charIndex < text.length,
               let kept = text.attribute(.responseNoBreak, at: charIndex, effectiveRange: nil) as? ResponseNoBreak,
               text.attribute(.responseNoBreak, at: charIndex - 1, effectiveRange: nil) != nil else { return true }
         let previous = (text.string as NSString).character(at: charIndex - 1)
-        return kept == .words && (previous == 0x20 || previous == 0x09)
+        guard previous == 0x20 || previous == 0x09 else { return false }
+        switch kept {
+        case .whole: return false
+        case .words: return true
+        case .line:
+            var span = NSRange()
+            _ = text.attribute(.responseNoBreak, at: charIndex, longestEffectiveRange: &span,
+                               in: (text.string as NSString).paragraphRange(for: NSRange(location: charIndex, length: 0)))
+            let style = text.attribute(.paragraphStyle, at: charIndex, effectiveRange: nil) as? NSParagraphStyle
+            let container = layoutManager.textContainers.first?.size.width ?? .greatestFiniteMagnitude
+            let tail = style.map { $0.tailIndent <= 0 ? container + $0.tailIndent : $0.tailIndent } ?? container
+            return text.attributedSubstring(from: span).size().width > tail - (style?.headIndent ?? 0)
+        }
     }
 
     func layoutManager(_ layoutManager: NSLayoutManager, shouldBreakLineByWordBeforeCharacterAt charIndex: Int) -> Bool {
-        Self.allowsBreak(in: layoutManager.textStorage, before: charIndex)
+        Self.allowsBreak(in: layoutManager, before: charIndex)
     }
 
     func layoutManager(_ layoutManager: NSLayoutManager, shouldBreakLineByHyphenatingBeforeCharacterAt charIndex: Int) -> Bool {
-        Self.allowsBreak(in: layoutManager.textStorage, before: charIndex)
+        Self.allowsBreak(in: layoutManager, before: charIndex)
     }
 }
 
@@ -1024,12 +1039,14 @@ private enum ConversationResponseAttributedText {
                 if intent.contains(.code) {
                     attributes[.responseInlineCode] = true
                     // Short code keeps together: whole in a table cell, as far
-                    // as the table allows; elsewhere it may still break at its
-                    // spaces, never inside a flag.
+                    // as the table allows; in prose, on one line when a line
+                    // can hold it; else it may still break at its spaces,
+                    // never inside a flag.
                     if string.count <= Prose.unbreakableCodeLength {
                         let whole = inCell && (cellCode == .whole || kept.contains(string)
                             || (cellCode == .wholeWords && !string.contains(" ")))
-                        attributes[.responseNoBreak] = whole ? ResponseNoBreak.whole : ResponseNoBreak.words
+                        attributes[.responseNoBreak] = whole ? ResponseNoBreak.whole
+                            : !inCell && string.count <= Prose.proseCodeOnOneLine ? ResponseNoBreak.line : ResponseNoBreak.words
                     }
                 }
                 if intent.contains(.strikethrough) { attributes[.strikethroughStyle] = NSUnderlineStyle.single.rawValue }
