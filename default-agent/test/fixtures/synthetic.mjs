@@ -11,7 +11,7 @@ import { createAssistantMessageEventStream } from '@earendil-works/pi-ai';
 // system prompt.
 export const model = { id: 'echo', name: 'Echo', provider: 'synthetic', api: 'synthetic', baseUrl: 'synthetic://local', reasoning: false,
   input: ['text', 'image'], contextWindow: 100000, maxTokens: 1000, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } };
-// A second model, to switch to.
+// A second, newer model: a new chat starts on it, so tests switch from it to `echo`.
 export const other = { ...model, id: 'echo-2', name: 'Echo 2' };
 
 // The tools and system prompt in effect at the end of the transcript, from its system messages.

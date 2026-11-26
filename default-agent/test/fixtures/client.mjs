@@ -5,7 +5,8 @@ import { fileURLToPath } from 'node:url';
 const agent = fileURLToPath(new URL('./agent.mjs', import.meta.url));
 
 // Plays the server: starts the agent, answers `woven/credentials` and `woven/settings`, and records what it sends.
-export function startAgent({ data, cwd, credentials = { synthetic: { type: 'apiKey', key: 'test-key' } }, settings = {} }) {
+// The agent is stopped when test `t` ends, so a test that fails still stops it.
+export function startAgent(t, { data, cwd, credentials = { synthetic: { type: 'apiKey', key: 'test-key' } }, settings = {} }) {
   const child = spawn(process.execPath, [agent], { cwd, env: { ...process.env, WOVEN_PI_DATA: data }, stdio: ['pipe', 'pipe', 'inherit'] });
   const waiting = new Map(), updates = [], notifications = [];
   let credentialRequests = 0, next = 0;
@@ -19,12 +20,14 @@ export function startAgent({ data, cwd, credentials = { synthetic: { type: 'apiK
     else waiting.get(message.id)?.(message);
   });
   const exited = new Promise(resolve => child.once('exit', resolve));
+  const stop = async () => { child.stdin.end(); await exited; };
+  t.after(stop);
   return {
     updates, notifications, get credentialRequests() { return credentialRequests; },
     request(method, params) {
       const id = ++next;
       return new Promise(resolve => { waiting.set(id, resolve); send({ id, method, params }); });
     },
-    async stop() { child.stdin.end(); await exited; },
+    stop,
   };
 }
