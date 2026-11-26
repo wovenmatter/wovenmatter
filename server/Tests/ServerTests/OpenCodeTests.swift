@@ -277,6 +277,8 @@ private func scriptCalls(_ events: [RuntimeEvent]) -> (open: [ToolCall], finishe
     #"{"type":"session.tool.progress","data":{"sessionID":"s","assistantMessageID":"m1","id":"c1"}}"#,
     #"{"type":"session.tool.success","data":{"sessionID":"s","assistantMessageID":"m1","id":"c1","content":[]}}"#,
     #"{"type":"session.step.failed","data":{"sessionID":"s","assistantMessageID":"m1","error":{"message":"aborted"}}}"#,
+    // The late end of a call whose start the stream missed.
+    #"{"type":"session.tool.success","data":{"sessionID":"s","assistantMessageID":"m0","id":"c0","content":[]}}"#,
     // The next execution, whose start the stream missed.
     #"{"type":"session.text.started","data":{"sessionID":"s","assistantMessageID":"m2","ordinal":0}}"#,
     #"{"type":"session.text.ended","data":{"sessionID":"s","assistantMessageID":"m2","ordinal":0,"text":"Done."}}"#,

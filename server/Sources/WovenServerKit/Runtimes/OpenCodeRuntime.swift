@@ -192,10 +192,14 @@ actor OpenCodeHost {
     sessions[session.nativeHandle] = session
   }
 
-  /// One user is done; the process ends when none is left.
-  func release(_ handle: String?, generation: Int) {
+  /// One user is done; the process ends when none is left. Its session's
+  /// registration goes only if it is still that session's: a newer session
+  /// of the same chat (opened while this one stopped) keeps its own. The
+  /// generation is the process's, which both share, so it cannot tell.
+  func release(_ session: OpenCodeSession?, generation: Int) {
     guard generation == server?.generation else { return }
-    if let handle {
+    if let session, sessions[session.nativeHandle] === session {
+      let handle = session.nativeHandle
       sessions[handle] = nil
       parents = parents.filter { $0.value != handle }
     }
@@ -489,7 +493,7 @@ final class OpenCodeSession: RuntimeSession {
     // The process may serve other sessions, so a running turn is stopped first.
     if state.withLock({ $0.running }) { try? await interrupt() }
     guard end() else { return }
-    await host.release(nativeHandle, generation: generation)
+    await host.release(self, generation: generation)
     emit.yield(.exited)
     emit.finish()
   }
