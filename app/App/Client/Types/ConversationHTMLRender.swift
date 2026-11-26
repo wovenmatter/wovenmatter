@@ -52,16 +52,15 @@ public enum ConversationHTMLDocument {
   /// image or font loads, or the theme changes.
   ///
   /// A page whose own rules or scripts follow the viewport's height (a height
-  /// media query, a viewport unit, a canvas sized to the window) can still
-  /// swing between two heights or keep growing. When reports change direction
-  /// three times within a second, the page keeps the tallest of them. When
-  /// three reports running move the same way, each right after the viewport
-  /// took the height reported before it, the page stops reporting briefly
-  /// and keeps measuring: if the height still changes it is real and is
-  /// reported; if it holds still it is reported once, and when the next
-  /// change again follows the viewport the page keeps the height it last
-  /// reported. Either hold lasts until the width changes or the reader
-  /// presses a pointer or key in the page.
+  /// media query, a viewport unit, a canvas sized to the window, even through
+  /// a delayed resize handler) can still swing between two heights or keep
+  /// growing. When the height keeps changing soon after each change of the
+  /// viewport, the page stops reporting for a moment, so the frame stays
+  /// still, and watches: a page that keeps changing is followed; one that
+  /// settles was answering the frame, and its height is held. A change while
+  /// the frame is still, a new width, or the reader pressing a pointer or key
+  /// in the page lets a held height go. The first measurement is always
+  /// reported.
   /// The size message also carries `lead`: the page's first visible text when
   /// it is a heading or a table's caption, else empty.
   public static func render(html: String) -> String {
@@ -99,25 +98,31 @@ public enum ConversationHTMLDocument {
           if(Math.max(...xs)-Math.min(...xs)<=1||Math.max(...ys)-Math.min(...ys)<=1)return -1;
           return Math.min(b,r.top+Math.max(...ys));}
         return Math.min(b,r.bottom);};
-      const leaf=/^(svg|canvas|img|video|iframe|object|embed)$/i,boxed=/paint|layout|strict|content/;
+      // Layout containment makes a box hold positioned content; only paint
+      // containment (`paint`, `strict`, `content`) also clips it.
+      const leaf=/^(svg|canvas|img|video|iframe|object|embed)$/i,holder=/paint|layout|strict|content/,clipper=/paint|strict|content/;
       const text=document.createRange();
       // The lowest point that shows, in page coordinates. Each box keeps the
       // clip its in-flow content gets (`flow`), the clip everything inside it
       // gets (`paint`), and whether it holds absolutely positioned content
-      // (`abs`) or content fixed in place (`fixed`).
+      // (`abs`) or content fixed in place (`fixed`). A wrapper with no box of
+      // its own (`display:contents`) passes its parent's on to its children.
       const lowest=()=>{const root=document.documentElement,body=document.body;
         const kept=new Map([[root,{flow:Infinity,paint:Infinity,abs:true,fixed:false}]]);
-        const holds=s=>s.transform!=='none'||s.filter!=='none'||s.perspective!=='none'||boxed.test(s.contain);
+        const holds=s=>s.transform!=='none'||s.filter!=='none'||s.perspective!=='none'||holder.test(s.contain);
         const bs=getComputedStyle(body);kept.set(body,{flow:Infinity,paint:Infinity,abs:bs.position!=='static'||holds(bs),fixed:holds(bs)});
         let low=0,seen=0;const stack=[...body.children].reverse();
+        const enter=e=>{for(let c=e.lastElementChild;c;c=c.previousElementSibling)stack.push(c);};
         while(stack.length&&++seen<=3000){const e=stack.pop(),s=getComputedStyle(e);
+          let inside=kept.get(e.parentElement);if(!inside)continue;
+          if(s.display==='contents'){kept.set(e,{...inside,abs:false,fixed:false});enter(e);continue;}
           if(s.display==='none'||s.opacity==='0'||s.contentVisibility==='hidden'||e.checkVisibility?.()===false)continue;
-          let inside=kept.get(e.parentElement);if(!inside)continue;const paint=inside.paint;
+          const paint=inside.paint;
           if(s.position==='absolute'||s.position==='fixed'){let a=e.parentElement;
             for(;a;a=a.parentElement){inside=kept.get(a);if(s.position==='absolute'?inside.abs:inside.fixed)break;}
             if(!a)continue;}
           const r=e.getBoundingClientRect(),own=cut(s,r);if(own<0)continue;
-          const clips=s.overflowY!=='visible'||boxed.test(s.contain);
+          const clips=s.overflowY!=='visible'||clipper.test(s.contain);
           if((r.width<=1||r.height<=1)&&(clips||own!==Infinity))continue;
           const limit=Math.min(inside.flow,paint,own);
           if(s.visibility==='visible'&&r.height>0)low=Math.max(low,Math.min(r.bottom,limit));
@@ -128,30 +133,45 @@ public enum ConversationHTMLDocument {
               if(q.height>0)low=Math.max(low,Math.min(q.bottom,limit));}
           kept.set(e,{flow:Math.min(inside.flow,clips?r.bottom-(parseFloat(s.borderBottomWidth)||0):Infinity),
             paint:Math.min(paint,own),abs:s.position!=='static'||holds(s),fixed:holds(s)});
-          for(let c=e.lastElementChild;c;c=c.previousElementSibling)stack.push(c);}
+          enter(e);}
         return low?low+scrollY:0;};
-      // Heights that follow the viewport. Reports that change direction three
-      // times within a second keep the tallest of them. Three changes running
-      // the same way, each measured just after the viewport took the height
-      // reported before it, look like feedback: the page stops reporting for
-      // a moment, and the viewport with it, and keeps measuring. A height
-      // that still changes is real and is reported. One that holds still is
-      // reported once (it may be where real growth ended); if the next change
-      // again follows the viewport, the height last reported stays.
-      let last=-1,lastLead='',queued=false,ran=-1e9,width=0,held=0,recent=[],resized=-1e9,run=0,way=0,quiet=null,doubt=false;
-      const settle=h=>{const t=performance.now();if(held)return held;
-        if(quiet){if(h!==quiet.h||t>=quiet.until){doubt=h===quiet.h;quiet=null;run=0;return h;}
-          setTimeout(schedule,25);return null;}
+      // Heights that follow the viewport. A change measured less than `calm`
+      // after the viewport last changed may be the page answering the height
+      // we reported. After three such changes in a row the page stops
+      // reporting, so the viewport stays still, and keeps measuring:
+      // - if the height changes twice more, or once the viewport has been
+      //   still for `calm`, the page is changing on its own: report it;
+      // - if it settles, the changes were feedback and the height is held.
+      //   Heights that went back and forth keep the tallest reported. Heights
+      //   that went one way keep the settled one, and once more, when the
+      //   viewport has been still for `calm`, the height the page then shows
+      //   (real growth may have ended there).
+      // A held height is let go by a change while the viewport is still, a
+      // new width, or the reader pressing a pointer or key in the page.
+      // The first measurement is always reported.
+      const calm=350;
+      let last=-1,lastLead='',queued=false,ran=-1e9,width=0,tall=0,resized=-1e9,run=[],quiet=null,held=null;
+      const settle=h=>{const t=performance.now();
+        if(innerHeight!==tall){if(tall)resized=t;tall=innerHeight;}
+        const still=t-resized>=calm;
+        if(last<0)return h;
+        if(held){
+          if(h!==held.seen){if(still){held=null;run=[];return h;}held.seen=h;}
+          if(h!==held.h&&held.spare){if(still){held.spare=false;return held.h=h;}setTimeout(schedule,resized+calm-t+5);}
+          return held.h;}
+        if(quiet){
+          if(h!==quiet.h){if(!still&&++quiet.moves<2){quiet.h=h;setTimeout(schedule,25);return null;}
+            quiet=null;run=[];return h;}
+          if(!still){setTimeout(schedule,25);return null;}
+          const q=quiet;quiet=null;run=[];
+          held=q.turned?{h:Math.max(q.peak,last),seen:h,spare:false}:{h,seen:h,spare:true};return held.h;}
         if(h===last)return h;
-        recent=recent.filter(x=>t-x[0]<1000);recent.push([t,h]);let turns=0;
-        for(let i=2;i<recent.length;i++)if((recent[i][1]-recent[i-1][1])*(recent[i-1][1]-recent[i-2][1])<0)turns++;
-        if(turns>=3)return held=Math.max(...recent.map(x=>x[1]));
-        const d=Math.sign(h-last),follows=t-resized<50&&Math.abs(innerHeight-Math.min(20000,Math.max(80,last)))<=1;
-        if(doubt){doubt=false;if(follows)return held=last;}
-        run=follows?(d===way?run+1:1):0;way=d;
-        if(run>=3){quiet={h,until:t+150};setTimeout(schedule,25);return null;}
-        return h;};
-      const release=()=>{held=0;recent=[];run=0;quiet=null;doubt=false;};
+        if(still){run=[];return h;}
+        if(!run.length)run=[last];run.push(h);
+        if(run.length<4)return h;
+        const turned=run.some((x,i)=>i>1&&(x-run[i-1])*(run[i-1]-run[i-2])<0);
+        quiet={h,moves:0,peak:Math.max(...run.slice(0,-1)),turned};setTimeout(schedule,25);return null;};
+      const release=()=>{held=null;run=[];quiet=null;};
       const measure=()=>{if(!queued)return;queued=false;ran=performance.now();const b=document.body;if(!b)return;
         if(innerWidth!==width){width=innerWidth;release();}
         const flow=document.documentElement.getBoundingClientRect().height,low=lowest();
@@ -159,11 +179,11 @@ public enum ConversationHTMLDocument {
         if(h!==null&&(h!==last||l!==lastLead)){last=h;lastLead=l;parent.postMessage({kind:'size',height:h,lead:l},'*');}};
       const schedule=()=>{if(queued)return;queued=true;const wait=ran+16-performance.now();
         if(wait>0)setTimeout(measure,wait);else{requestAnimationFrame(measure);setTimeout(measure,0);}};
-      for(const kind of ['pointerdown','keydown'])addEventListener(kind,()=>{if(held||quiet||recent.length){release();schedule();}},true);
+      for(const kind of ['pointerdown','keydown'])addEventListener(kind,()=>{if(held||quiet||run.length){release();schedule();}},true);
       new MutationObserver(schedule).observe(document.documentElement,{subtree:true,childList:true,attributes:true,characterData:true});
       document.addEventListener('load',schedule,true);
       document.fonts?.addEventListener?.('loadingdone',schedule);
-      addEventListener('resize',()=>{resized=performance.now();schedule();},true);
+      addEventListener('resize',schedule,true);
       addEventListener('DOMContentLoaded',()=>{const o=new ResizeObserver(schedule);o.observe(document.documentElement);o.observe(document.body);schedule();});
       addEventListener('load',()=>{schedule();parent.postMessage({kind:'ready'},'*');});
       document.addEventListener('click',e=>{const a=e.composedPath().find(x=>x?.matches?.('a[href]'));if(!a||!e.isTrusted)return;
@@ -173,18 +193,16 @@ public enum ConversationHTMLDocument {
     })();
     </script>
     """#
-    // Skip comments and script bodies when finding a real head. Preserve a
-    // leading doctype so fragments and complete documents use standards mode.
-    let scan = try! NSRegularExpression(pattern: #"(?is)<!--[\s\S]*?(?:-->|$)|<script\b(?:"[^"]*"|'[^']*'|[^'">])*>[\s\S]*?(?:</script\s*>|$)|<head\b(?:"[^"]*"|'[^']*'|[^'">])*>|<!doctype\b(?:"[^"]*"|'[^']*'|[^'">])*>"#)
+    // The bootstrap goes before anything the page wrote, right after its
+    // doctype when the page opens with one (past leading comments), so no
+    // element of the page can hold it as text and no policy of the page can
+    // block it. A page without a doctype gets one, so every page uses
+    // standards mode.
+    let opening = try! NSRegularExpression(pattern: #"(?i)^(?:[\s\x{FEFF}]|<!--[\s\S]*?-->|<\?[^>]*>)*<!doctype\b(?:"[^"]*"|'[^']*'|[^'">])*>"#)
     let source = html as NSString
-    var headEnd: Int?, doctypeEnd: Int?
-    for match in scan.matches(in: html, range: NSRange(location: 0, length: source.length)) {
-      let tag = source.substring(with: match.range).lowercased()
-      if tag.hasPrefix("<head") { headEnd = NSMaxRange(match.range); break }
-      if tag.hasPrefix("<!doctype") { doctypeEnd = NSMaxRange(match.range) }
-    }
-    let insertion = headEnd ?? doctypeEnd ?? 0
-    let authored = (headEnd == nil && doctypeEnd == nil ? "<!doctype html>" : "")
+    let doctype = opening.firstMatch(in: html, range: NSRange(location: 0, length: source.length))
+    let insertion = doctype.map { NSMaxRange($0.range) } ?? 0
+    let authored = (doctype == nil ? "<!doctype html>" : "")
       + source.substring(to: insertion) + bootstrap + source.substring(from: insertion)
     let encoded = Data(authored.utf8).base64EncodedString()
     return #"""
