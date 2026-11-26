@@ -220,6 +220,11 @@ struct CloudConversation: View {
                         sendFromComposer()
                     }
                 }
+                // `stop` stops this chat's running turn, as the composer's stop button does.
+                .debugRequest("stop") {
+                    guard isActivePanel, let session, session.isRunning else { return }
+                    Task { await session.stop() }
+                }
                 // `status:PATH` writes whether this chat's turn is still running.
                 .debugCommand("status:") { path in
                     guard isActivePanel else { return }
@@ -306,7 +311,6 @@ struct CloudConversation: View {
             .simultaneousGesture(TapGesture().onEnded(onActivatePanel))
 
             bottomStack
-                .conversationCoverSnapshot()
                 .frame(maxWidth: .infinity)
                 .padding(.horizontal, usesCompactPanelSpacing ? 12 : 32)
                 .padding(.top, 8)
@@ -377,6 +381,7 @@ struct CloudConversation: View {
                     Task { await session.answer(interaction.id, with: response) }
                 }
                 .disabled(!session.isOwnerReachable)
+                .conversationCoverSnapshot()
                 .id(interaction.id)
             }
             // Side buttons sit on the composer's bottom control row; the
@@ -1106,23 +1111,27 @@ private struct MacAccessNotice: View {
     let openSettings: (() -> Void)?
 
     var body: some View {
-        if let openSettings {
-            Button(action: openSettings) { label(showsArrow: true) }
-                .buttonStyle(SettingsQuietButtonStyle(horizontalPadding: 12, minimumHeight: 32))
-                .background(theme.palette.themeWhisper,
-                    in: RoundedRectangle(cornerRadius: WovenMetrics.controlRadius, style: .continuous))
-                .background(WovenPalette.background,
-                    in: RoundedRectangle(cornerRadius: WovenMetrics.controlRadius, style: .continuous))
-                .help("Open Settings → Permissions & Access")
-        } else {
-            label(showsArrow: false)
-                .padding(.horizontal, 12)
-                .frame(minHeight: 32)
-                .background(theme.palette.themeWhisper,
-                    in: RoundedRectangle(cornerRadius: WovenMetrics.controlRadius, style: .continuous))
-                .background(WovenPalette.background,
-                    in: RoundedRectangle(cornerRadius: WovenMetrics.controlRadius, style: .continuous))
+        // Opaque over the chat, so a debug still draws it over web pictures too.
+        Group {
+            if let openSettings {
+                Button(action: openSettings) { label(showsArrow: true) }
+                    .buttonStyle(SettingsQuietButtonStyle(horizontalPadding: 12, minimumHeight: 32))
+                    .background(theme.palette.themeWhisper,
+                        in: RoundedRectangle(cornerRadius: WovenMetrics.controlRadius, style: .continuous))
+                    .background(WovenPalette.background,
+                        in: RoundedRectangle(cornerRadius: WovenMetrics.controlRadius, style: .continuous))
+                    .help("Open Settings → Permissions & Access")
+            } else {
+                label(showsArrow: false)
+                    .padding(.horizontal, 12)
+                    .frame(minHeight: 32)
+                    .background(theme.palette.themeWhisper,
+                        in: RoundedRectangle(cornerRadius: WovenMetrics.controlRadius, style: .continuous))
+                    .background(WovenPalette.background,
+                        in: RoundedRectangle(cornerRadius: WovenMetrics.controlRadius, style: .continuous))
+            }
         }
+        .conversationCoverSnapshot()
     }
 
     private func label(showsArrow: Bool) -> some View {

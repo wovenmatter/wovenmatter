@@ -242,6 +242,7 @@ struct ConversationComposer: View {
                 style: .continuous
             )
         )
+        .conversationGlassSnapshot()
         .overlay {
             RoundedRectangle(cornerRadius: WovenMetrics.composerRadius, style: .continuous)
                 .stroke(

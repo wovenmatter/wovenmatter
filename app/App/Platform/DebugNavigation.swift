@@ -1,3 +1,4 @@
+import CoreImage
 import SwiftUI
 import WebKit
 
@@ -154,13 +155,32 @@ enum DebugNavigationSignal {
         view.displayIfNeeded()
         guard let bitmap = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return }
         view.cacheDisplay(in: view.bounds, to: bitmap)
-        // The window as drawn, kept apart for redrawing showing controls over
-        // the pages. (Never the composite's own image: asked for before the pages
+        // The window as drawn, copied apart for redrawing what floats over the
+        // pages. (Never the composite's own image: asked for before the pages
         // are drawn in, it would hand that earlier image back for the file.)
         let covers = Array(ConversationEdgeSnapshot.covers.values)
-        let window: CGImage? = ConversationHTMLControlsSnapshot.shown.isEmpty && covers.isEmpty ? nil : {
-            guard let copy = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return nil }
-            view.cacheDisplay(in: view.bounds, to: copy)
+        let window: CGImage? = ConversationHTMLControlsSnapshot.shown.isEmpty && covers.isEmpty ? nil
+            : (bitmap.copy() as? NSBitmapImageRep)?.cgImage
+        // Window captures draw glass (the composer) clear. The window again with
+        // the transcripts under each glass surface left out gives the surface's
+        // own content alone, drawn sharp over what it blurs. The transcripts are
+        // hidden only for this capture and shown again before anything reaches
+        // the screen.
+        let glass = Array(ConversationEdgeSnapshot.glass.values)
+        // Only where the glass is: the rest of the window is not drawn again.
+        let glassArea = glass.reduce(CGRect.null) { $0.union($1) }.intersection(view.bounds)
+        let clean: CGImage? = glassArea.isEmpty ? nil : {
+            let under = scrollViews(in: view).filter { scroll in
+                guard !scroll.isHidden else { return false }
+                let frame = view.convert(scroll.bounds, from: scroll)
+                return glass.contains { frame.contains(CGPoint(x: $0.midX, y: $0.midY)) && frame.height > 2 * $0.height }
+            }
+            under.forEach { $0.isHidden = true }
+            defer { under.forEach { $0.isHidden = false } }
+            let area = view.isFlipped ? glassArea
+                : CGRect(x: glassArea.minX, y: view.bounds.height - glassArea.maxY, width: glassArea.width, height: glassArea.height)
+            guard let copy = view.bitmapImageRepForCachingDisplay(in: area) else { return nil }
+            view.cacheDisplay(in: area, to: copy)
             return copy.cgImage
         }()
         func webViews(in view: NSView) -> [WKWebView] {
@@ -242,7 +262,7 @@ enum DebugNavigationSignal {
                     }
                     cg.endTransparencyLayer()
                 }
-                // Then what floats over the transcript (the composer stack, the jump
+                // Then what floats opaque over the transcript (notices, the jump
                 // button): web content scrolls behind it, never over it.
                 if let window {
                     for rect in ConversationHTMLControlsSnapshot.shown + covers where !pieces.isEmpty {
@@ -257,8 +277,13 @@ enum DebugNavigationSignal {
                 NSGraphicsContext.restoreGraphicsState()
             }
             var output = bitmap
+            if let clean, let drawn = bitmap.cgImage,
+               let glassed = glassed(drawn, clean: clean, cleanOrigin: glassArea.origin, surfaces: glass, scale: CGFloat(bitmap.pixelsWide) / view.bounds.width,
+                                     dark: view.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua) {
+                output = NSBitmapImageRep(cgImage: glassed)
+            }
             if chatOnly, let panel = scrollViews(in: view).max(by: { $0.visibleRect.height < $1.visibleRect.height }),
-               let image = bitmap.cgImage {
+               let image = output.cgImage {
                 let frame = view.convert(panel.bounds, from: panel)
                 let scale = CGFloat(bitmap.pixelsWide) / view.bounds.width
                 let crop = CGRect(x: frame.minX * scale, y: 0, width: frame.width * scale, height: CGFloat(bitmap.pixelsHigh))
@@ -266,6 +291,53 @@ enum DebugNavigationSignal {
             }
             try? output.representation(using: .png, properties: [:])?.write(to: path, options: .atomic)
         }
+    }
+
+    private static let glassContext = CIContext()
+
+    /// Glass as the window shows it, near enough: inside each surface (window
+    /// coordinates from the top), what lies behind blurred, under the surface's
+    /// own content drawn mostly opaque over the panel's colour, and the
+    /// material's tint: a little darker than the panel in light, lighter in dark.
+    private static func glassed(_ drawn: CGImage, clean: CGImage, cleanOrigin: CGPoint, surfaces: [CGRect], scale: CGFloat,
+                                dark: Bool) -> CGImage? {
+        let width = drawn.width, height = drawn.height
+        guard let cg = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
+                                 space: CGColorSpaceCreateDeviceRGB(),
+                                 bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
+        let whole = CGRect(x: 0, y: 0, width: width, height: height)
+        cg.draw(drawn, in: whole)
+        let context = glassContext
+        let blur = 4 * scale
+        for surface in surfaces {
+            // Pixels from the top for cropping; from the bottom for drawing.
+            let source = CGRect(x: surface.minX * scale, y: surface.minY * scale,
+                                width: surface.width * scale, height: surface.height * scale).integral
+            let target = CGRect(x: source.minX, y: CGFloat(height) - source.maxY, width: source.width, height: source.height)
+            let margin = source.insetBy(dx: -3 * blur, dy: -3 * blur).intersection(CGRect(x: 0, y: 0, width: width, height: height))
+            let inClean = source.offsetBy(dx: -cleanOrigin.x * scale, dy: -cleanOrigin.y * scale).integral
+            guard let behind = drawn.cropping(to: margin), let surfaceOnly = clean.cropping(to: inClean) else { continue }
+            let input = CIImage(cgImage: behind).clampedToExtent()
+            guard let filter = CIFilter(name: "CIGaussianBlur", parameters: [kCIInputImageKey: input, kCIInputRadiusKey: blur]),
+                  let output = filter.outputImage,
+                  let blurred = context.createCGImage(output, from: CGRect(x: 0, y: 0, width: behind.width, height: behind.height))
+            else { continue }
+            cg.saveGState()
+            let radius = WovenMetrics.composerRadius * scale
+            cg.addPath(CGPath(roundedRect: target, cornerWidth: radius, cornerHeight: radius, transform: nil))
+            cg.clip()
+            cg.draw(blurred, in: CGRect(x: margin.minX, y: CGFloat(height) - margin.maxY, width: margin.width, height: margin.height))
+            cg.setAlpha(0.62)
+            cg.draw(surfaceOnly, in: target)
+            cg.setAlpha(1)
+            cg.setFillColor(CGColor(gray: dark ? 1 : 0, alpha: dark ? 0.12 : 0.06))
+            cg.fill(target)
+            // The surface's own text and controls at full strength over that.
+            cg.setBlendMode(dark ? .lighten : .darken)
+            cg.draw(surfaceOnly, in: target)
+            cg.restoreGState()
+        }
+        return cg.makeImage()
     }
 
     /// Keeps only what a transcript's mask shows of what was just drawn:

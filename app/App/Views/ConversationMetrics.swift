@@ -135,10 +135,18 @@ extension View {
         modifier(ConversationEdges(stackHeight: stackHeight, jumpLabel: jumpLabel, jump: jump))
     }
 
-    /// Debug builds: records where something drawn over a transcript is (its
-    /// composer stack), so a debug still draws it again over web pictures.
+    /// Debug builds: records where something opaque drawn over a transcript is
+    /// (a notice, the jump button), so a debug still draws it again over web
+    /// pictures.
     func conversationCoverSnapshot() -> some View {
         modifier(CoverSnapshotRecorder())
+    }
+
+    /// Debug builds: records where a glass surface over a transcript is (the
+    /// composer), so a debug still draws it as glass: window captures draw
+    /// the material clear.
+    func conversationGlassSnapshot() -> some View {
+        modifier(CoverSnapshotRecorder(isGlass: true))
     }
 }
 
@@ -175,6 +183,7 @@ extension ConversationGeometry {
 struct ConversationEdgeSnapshot: Equatable {
     @MainActor static var shown: [UUID: ConversationEdgeSnapshot] = [:]
     @MainActor static var covers: [UUID: CGRect] = [:]
+    @MainActor static var glass: [UUID: CGRect] = [:]
 
     /// The transcript a piece of web content at `rect` sits in.
     @MainActor static func containing(_ rect: CGRect) -> ConversationEdgeSnapshot? {
@@ -206,6 +215,7 @@ private struct EdgeSnapshotRecorder: ViewModifier {
 }
 
 private struct CoverSnapshotRecorder: ViewModifier {
+    var isGlass = false
     #if DEBUG
     @State private var id = UUID()
     #endif
@@ -213,8 +223,12 @@ private struct CoverSnapshotRecorder: ViewModifier {
     func body(content: Content) -> some View {
         #if DEBUG
         content
-            .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { ConversationEdgeSnapshot.covers[id] = $0 }
-            .onDisappear { ConversationEdgeSnapshot.covers[id] = nil }
+            .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { frame in
+                if isGlass { ConversationEdgeSnapshot.glass[id] = frame } else { ConversationEdgeSnapshot.covers[id] = frame }
+            }
+            .onDisappear {
+                if isGlass { ConversationEdgeSnapshot.glass[id] = nil } else { ConversationEdgeSnapshot.covers[id] = nil }
+            }
         #else
         content
         #endif

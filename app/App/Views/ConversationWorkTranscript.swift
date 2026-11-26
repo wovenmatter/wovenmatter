@@ -721,7 +721,17 @@ private struct ConversationReasonedCommentary: View {
                 )
             }
             .padding(.leading, ConversationMetrics.textInset)
-            if expanded.wrappedValue {
+            let summary = ConversationThinkingBlock.summary(of: thought)
+            if expanded.wrappedValue, summary.isComplete {
+                // A thought that is only its title opens to that title.
+                Text(summary.label)
+                    .font(.system(size: 13.5))
+                    .foregroundStyle(WovenPalette.foreground.opacity(ConversationResponse.Style.reasoning.inkOpacity))
+                    .fixedSize(horizontal: false, vertical: true)
+                    .textSelection(.enabled)
+                    .padding(.top, ConversationMetrics.labelGap)
+                    .padding(.leading, ConversationMetrics.textInset)
+            } else if expanded.wrappedValue {
                 ConversationBoundedWorkList(
                     group: ConversationWorkGroup(id: thought.id, activities: [thought], endsTimeline: false),
                     runID: runID, runStatus: .completed, followsAppends: false,

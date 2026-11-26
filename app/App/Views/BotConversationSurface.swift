@@ -606,7 +606,6 @@ private struct BotConversationPane: View {
                 .padding(.bottom, ConversationComposer.verticalPadding)
             }
         }
-        .conversationCoverSnapshot()
         .frame(maxWidth: .infinity)
         .padding(.horizontal, usesCompactSpacing ? 12 : 32)
         .padding(.top, 8)
