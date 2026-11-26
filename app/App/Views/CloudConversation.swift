@@ -294,9 +294,9 @@ struct CloudConversation: View {
                     conversationChanged(to: conversationID)
                 }
                 .onChange(of: transcriptIdentity, initial: true) { _, identity in measured.shown = identity }
-                .conversationEdges(topClearance: ConversationMetrics.floatingControls, stackHeight: bottomStackHeight,
-                                        jumpLabel: !scrollState.isNearBottom && hasContentBelow && conversation != nil
-                                            ? "Latest reply" : nil) {
+                .conversationEdges(stackHeight: bottomStackHeight,
+                                   jumpLabel: !scrollState.isNearBottom && hasContentBelow && conversation != nil
+                                       ? "Latest reply" : nil) {
                     takeOverScrolling()
                     transcriptOwnsScroll = false
                     scrollState.setNearBottom(true)
@@ -306,6 +306,7 @@ struct CloudConversation: View {
             .simultaneousGesture(TapGesture().onEnded(onActivatePanel))
 
             bottomStack
+                .conversationCoverSnapshot()
                 .frame(maxWidth: .infinity)
                 .padding(.horizontal, usesCompactPanelSpacing ? 12 : 32)
                 .padding(.top, 8)
@@ -860,8 +861,8 @@ struct CloudConversation: View {
         scrollState.sourceMessagePositioned(in: item.conversationID)
         scrollPosition = ScrollPosition(idType: String.self)
         scrollWithoutAnimation(proxy, to: shownID, anchor: .top)
-        // Below the top edge's clear band and fade, where it can be seen; in
-        // a later update, so it is never a second target beside the first.
+        // Clear of the floating buttons over the top edge, where it can be
+        // seen; in a later update, so it is never a second target beside the first.
         try? await Task.sleep(for: .milliseconds(50))
         guard !Task.isCancelled, generation == scrollGeneration else { return }
         scroll { $0.scrollTo(y: max(0, measured.offset - ConversationMetrics.topInset)) }

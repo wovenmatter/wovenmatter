@@ -157,7 +157,8 @@ enum DebugNavigationSignal {
         // The window as drawn, kept apart for redrawing showing controls over
         // the pages. (Never the composite's own image: asked for before the pages
         // are drawn in, it would hand that earlier image back for the file.)
-        let window: CGImage? = ConversationHTMLControlsSnapshot.shown.isEmpty ? nil : {
+        let covers = Array(ConversationEdgeSnapshot.covers.values)
+        let window: CGImage? = ConversationHTMLControlsSnapshot.shown.isEmpty && covers.isEmpty ? nil : {
             guard let copy = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return nil }
             view.cacheDisplay(in: view.bounds, to: copy)
             return copy.cgImage
@@ -241,8 +242,10 @@ enum DebugNavigationSignal {
                     }
                     cg.endTransparencyLayer()
                 }
+                // Then what floats over the transcript (the composer stack, the jump
+                // button): web content scrolls behind it, never over it.
                 if let window {
-                    for rect in ConversationHTMLControlsSnapshot.shown {
+                    for rect in ConversationHTMLControlsSnapshot.shown + covers where !pieces.isEmpty {
                         let target = unflipped(rect)
                         let source = CGRect(x: rect.minX * scale, y: rect.minY * scale,
                                             width: rect.width * scale, height: rect.height * scale).integral
@@ -266,15 +269,10 @@ enum DebugNavigationSignal {
     }
 
     /// Keeps only what a transcript's mask shows of what was just drawn:
-    /// nothing outside the transcript, faded across its edge bands.
+    /// nothing outside the transcript, faded across its top edge.
     private static func fade(_ cg: CGContext, to edges: ConversationEdgeSnapshot, height: CGFloat, width: CGFloat) {
         let frame = edges.frame
-        let stops: [(y: CGFloat, alpha: CGFloat)] = [
-            (frame.minY, 0), (frame.minY + edges.topClearance, 0),
-            (frame.minY + edges.topClearance + edges.topFade, 1),
-            (frame.maxY - edges.bottomClearance - edges.bottomFade, 1),
-            (frame.maxY - edges.bottomClearance, 0), (frame.maxY, 0),
-        ]
+        let stops: [(y: CGFloat, alpha: CGFloat)] = [(frame.minY, 0), (frame.minY + edges.topFade, 1), (frame.maxY, 1)]
         // Window coordinates run down from the top; the bitmap's run up.
         cg.saveGState()
         cg.setBlendMode(.destinationIn)

@@ -61,8 +61,9 @@ struct ConversationHTMLRenderView: View {
         VStack(alignment: .leading, spacing: ConversationMetrics.labelGap) {
             if captionDecided, let caption {
                 Text(caption)
-                    .font(.system(size: 11.5, weight: .medium))
-                    .foregroundStyle(WovenPalette.mutedForeground)
+                    // The visual's title, in the ink tool rows' labels use.
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(WovenPalette.foreground.opacity(0.72))
                     .lineLimit(1)
                     .truncationMode(.tail)
             }

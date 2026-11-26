@@ -126,16 +126,19 @@ struct ConversationTextButton: View {
 
 extension View {
     /// The edges of a transcript, the same in agent chats, bot chats and the
-    /// Forum. At the top, rows fade out before `topClearance` (what floats
-    /// over the transcript there), so none passes legibly behind it. At the
-    /// bottom, rows fade out before the composer stack, so none shows beside
-    /// or through it. While the reader is away from the end (`jumpLabel` set),
-    /// a round button to the end sits centred just above the stack, and the
-    /// clear band reaches up behind it, so it never covers legible text.
-    /// Under Reduce Transparency both edges are hard.
-    func conversationEdges(topClearance: CGFloat, stackHeight: CGFloat, jumpLabel: String?,
-                           jump: @escaping () -> Void) -> some View {
-        modifier(ConversationEdges(topClearance: topClearance, stackHeight: stackHeight, jumpLabel: jumpLabel, jump: jump))
+    /// Forum. It uses the panel's whole height: rows scroll up to the top edge,
+    /// fading out over its last `labelGap`, and down behind the glass composer
+    /// stack, which shows them through it. While the reader is away from the end
+    /// (`jumpLabel` set), a round button to the end sits centred just above the
+    /// stack. Under Reduce Transparency the top edge is hard.
+    func conversationEdges(stackHeight: CGFloat, jumpLabel: String?, jump: @escaping () -> Void) -> some View {
+        modifier(ConversationEdges(stackHeight: stackHeight, jumpLabel: jumpLabel, jump: jump))
+    }
+
+    /// Debug builds: records where something drawn over a transcript is (its
+    /// composer stack), so a debug still draws it again over web pictures.
+    func conversationCoverSnapshot() -> some View {
+        modifier(CoverSnapshotRecorder())
     }
 }
 
@@ -145,8 +148,8 @@ enum ConversationEnd {
     static let liveEdge: CGFloat = 2
 
     /// The newest content is obscured once the end is more than a turn gap
-    /// below what shows: rows end that far above the clearance under them,
-    /// whose top is where the composer's fade begins.
+    /// below what shows: the last row then reaches that far into the
+    /// clearance kept for the composer stack, behind the stack.
     static func isObscured(distance: CGFloat) -> Bool { distance > ConversationMetrics.turnGap }
 
     static func distance(_ geometry: ScrollGeometry) -> CGFloat {
@@ -165,11 +168,13 @@ extension ConversationGeometry {
 }
 
 #if DEBUG
-/// Where each shown transcript's edges fade, in window coordinates from the
-/// top, for debug snapshots: they draw web content in after the window, past
-/// SwiftUI's mask, and fade each piece with the edges of the transcript it is in.
+/// Where each shown transcript's top fade is, in window coordinates from the
+/// top, and what is drawn over transcripts, for debug snapshots: they draw web
+/// content in after the window, past SwiftUI's mask and over everything, so
+/// each piece is faded like the transcript it is in and then covered again.
 struct ConversationEdgeSnapshot: Equatable {
     @MainActor static var shown: [UUID: ConversationEdgeSnapshot] = [:]
+    @MainActor static var covers: [UUID: CGRect] = [:]
 
     /// The transcript a piece of web content at `rect` sits in.
     @MainActor static func containing(_ rect: CGRect) -> ConversationEdgeSnapshot? {
@@ -177,10 +182,7 @@ struct ConversationEdgeSnapshot: Equatable {
     }
 
     let frame: CGRect
-    let topClearance: CGFloat
     let topFade: CGFloat
-    let bottomFade: CGFloat
-    let bottomClearance: CGFloat
 }
 #endif
 
@@ -188,17 +190,13 @@ struct ConversationEdgeSnapshot: Equatable {
 /// builds record nothing.
 private struct EdgeSnapshotRecorder: ViewModifier {
     let id: UUID?
-    let topClearance: CGFloat
     let topFade: CGFloat
-    let bottomFade: CGFloat
-    let bottomClearance: CGFloat
 
     func body(content: Content) -> some View {
         #if DEBUG
         content
             .onGeometryChange(for: ConversationEdgeSnapshot.self) { geometry in
-                ConversationEdgeSnapshot(frame: geometry.frame(in: .global), topClearance: topClearance, topFade: topFade,
-                                         bottomFade: bottomFade, bottomClearance: bottomClearance)
+                ConversationEdgeSnapshot(frame: geometry.frame(in: .global), topFade: topFade)
             } action: { snapshot in if let id { ConversationEdgeSnapshot.shown[id] = snapshot } }
             .onDisappear { if let id { ConversationEdgeSnapshot.shown[id] = nil } }
         #else
@@ -207,9 +205,24 @@ private struct EdgeSnapshotRecorder: ViewModifier {
     }
 }
 
+private struct CoverSnapshotRecorder: ViewModifier {
+    #if DEBUG
+    @State private var id = UUID()
+    #endif
+
+    func body(content: Content) -> some View {
+        #if DEBUG
+        content
+            .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { ConversationEdgeSnapshot.covers[id] = $0 }
+            .onDisappear { ConversationEdgeSnapshot.covers[id] = nil }
+        #else
+        content
+        #endif
+    }
+}
+
 private struct ConversationEdges: ViewModifier {
     static let jumpSize: CGFloat = 30
-    let topClearance: CGFloat
     let stackHeight: CGFloat
     let jumpLabel: String?
     let jump: () -> Void
@@ -229,23 +242,16 @@ private struct ConversationEdges: ViewModifier {
 
     func body(content: Content) -> some View {
         let stackTop = stackHeight + ConversationBottomOverlayLayout.bottomOffset
-        let jumpBand = jumpLabel == nil ? 0 : ConversationMetrics.rowGap + Self.jumpSize
-        let topFade = reduceTransparency ? 0 : ConversationMetrics.entryGap
-        let bottomFade = reduceTransparency ? 0 : ConversationBottomOverlayLayout.breathingRoom
+        let topFade = reduceTransparency ? 0 : ConversationMetrics.labelGap
         content
             .mask {
                 VStack(spacing: 0) {
-                    Color.clear.frame(height: topClearance)
                     LinearGradient(colors: [.clear, .black], startPoint: .top, endPoint: .bottom)
                         .frame(height: topFade)
                     Color.black
-                    LinearGradient(colors: [.black, .clear], startPoint: .top, endPoint: .bottom)
-                        .frame(height: bottomFade)
-                    Color.clear.frame(height: stackTop + jumpBand)
                 }
             }
-            .modifier(EdgeSnapshotRecorder(id: debugSnapshotID, topClearance: topClearance, topFade: topFade,
-                                           bottomFade: bottomFade, bottomClearance: stackTop + jumpBand))
+            .modifier(EdgeSnapshotRecorder(id: debugSnapshotID, topFade: topFade))
             .overlay(alignment: .bottom) {
                 if let jumpLabel {
                     Button(action: jump) {
@@ -261,6 +267,7 @@ private struct ConversationEdges: ViewModifier {
                     .buttonStyle(.plain)
                     .help(jumpLabel)
                     .accessibilityLabel(jumpLabel)
+                    .conversationCoverSnapshot()
                     .padding(.bottom, stackTop + ConversationMetrics.rowGap)
                 }
             }

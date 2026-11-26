@@ -190,8 +190,11 @@ struct ConversationWorkTranscript: View {
                         .transition(reduceMotion ? .identity : .opacity)
                     }
                     if showsThinking {
+                        // Next to a visual reply, a section, as everything beside one keeps.
                         ConversationThinkingLabel(text: "Thinking")
-                            .padding(.top, entries.isEmpty ? 0 : ConversationMetrics.rowGap)
+                            .padding(.top, entries.isEmpty ? 0
+                                : entries.last.map(Self.isVisualReply) == true ? ConversationMetrics.sectionGap
+                                : ConversationMetrics.rowGap)
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -244,8 +247,9 @@ struct ConversationWorkTranscript: View {
     /// The entries that draw rows, and the thoughts sentences carry instead.
     private static func carryThoughts(_ drawn: [ConversationWorkTimelineEntry],
                                       isRunning: Bool) -> ([ConversationWorkTimelineEntry], [String: AgentRunActivity]) {
-        // An untitled settled thought right before a sentence of commentary
-        // belongs to it: the sentence carries it, with no row of its own.
+        // A settled thought right before a sentence of commentary, untitled or
+        // only its title, belongs to it: the sentence carries it, with no row
+        // of its own, and opens to it.
         var reasoning: [String: AgentRunActivity] = [:]
         var carried: Set<String> = []
         for (index, entry) in drawn.enumerated() where index + 1 < drawn.count {
@@ -253,7 +257,7 @@ struct ConversationWorkTranscript: View {
                   case .commentary = drawn[index + 1].content,
                   !(isRunning && thought.workTimelineShowsProgress) else { continue }
             let summary = ConversationThinkingBlock.summary(of: thought)
-            guard summary.label == "Thought", !summary.isRecord else { continue }
+            guard summary.label == "Thought" || summary.isComplete, !summary.isRecord else { continue }
             reasoning[drawn[index + 1].id] = thought
             carried.insert(entry.id)
         }
@@ -272,8 +276,8 @@ struct ConversationWorkTranscript: View {
         guard let previous else { return 0 }
         if isVisualReply(entry) || isVisualReply(previous) { return ConversationMetrics.sectionGap }
         if case .commentary = previous.content, isTool(entry) { return ConversationMetrics.labelGap }
-        // A thought, drawn as a row or as its one-line title, keeps a row's gap
-        // (it took the place of "Thinking"); the sentence after it stays with it.
+        // A thought keeps a row's gap (it took the place of "Thinking"); the
+        // sentence after a thought row stays with it.
         if case .commentary = entry.content { return isThought(previous) ? ConversationMetrics.labelGap : ConversationMetrics.sectionGap }
         return ConversationMetrics.rowGap
     }
@@ -445,8 +449,18 @@ private struct ConversationElapsedButtonStyle: ButtonStyle {
     @Environment(\.isEnabled) private var isEnabled
     @State private var hovered = false
 
+    /// Around the label the click target reaches a row gap either side and
+    /// stands at least 26 points tall, without moving the label or anything
+    /// around it.
+    private static let reach = (horizontal: ConversationMetrics.rowGap, vertical: CGFloat(6))
+
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
+            .padding(.horizontal, Self.reach.horizontal)
+            .padding(.vertical, Self.reach.vertical)
+            .contentShape(Rectangle())
+            .padding(.horizontal, -Self.reach.horizontal)
+            .padding(.vertical, -Self.reach.vertical)
             .background {
                 RoundedRectangle(cornerRadius: 4, style: .continuous)
                     .fill(isEnabled && (configuration.isPressed || hovered)
@@ -552,9 +566,12 @@ private struct ConversationThinkingBlock: View {
         if summary.isComplete, summary.isRecord {
             ConversationThinkingLabel(text: summary.label, systemImage: glyph, isRecord: true).lineLimit(1)
         } else if summary.isComplete {
-            // A title with nothing behind it says one thing: a line of
-            // commentary, with nothing to open.
-            ConversationResponse(content: summary.label, isStreaming: false, showsCopyButton: false, style: .commentary)
+            // A title with nothing behind it, where no sentence carries it: its
+            // line in reasoning's ink at the text inset, with nothing to open.
+            Text(summary.label)
+                .font(.system(size: 13.5))
+                .foregroundStyle(WovenPalette.foreground.opacity(ConversationResponse.Style.reasoning.inkOpacity))
+                .fixedSize(horizontal: false, vertical: true)
                 .padding(.leading, ConversationMetrics.textInset)
         } else {
             disclosure(label: summary.label, systemImage: glyph, isRecord: summary.isRecord)

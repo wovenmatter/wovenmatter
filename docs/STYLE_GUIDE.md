@@ -457,12 +457,13 @@ when an intentional design change is accepted.
   work divider is drawn in the middle of that gap over foldable work that is
   showing, never over a Thinking row with nothing in it yet or the dots, so it
   never adds or removes height. A unit of work is a sentence of commentary and
-  the tools it introduces, a section above it and a label gap inside; an
-  untitled thought that led to the sentence has no row of its own: the
-  sentence stays commentary, at the lane's text inset with no icon, and a
-  chevron after it opens the reasoning. A thought that is only its title is a
-  line of commentary with nothing to open; one that opens keeps the brain and a
-  chevron, in reasoning's ink and regular weight. Anywhere else a thought keeps
+  the tools it introduces, a section above it and a label gap inside; a
+  thought that led to the sentence, untitled or only its title, has no row of
+  its own: the sentence stays commentary, at the lane's text inset with no
+  icon, and a chevron after it opens the reasoning. Elsewhere a thought that is
+  only its title is its line in reasoning's ink at the text inset, with no icon
+  and nothing to open; one that opens keeps the brain and a chevron, in
+  reasoning's ink and regular weight. Anywhere else a thought keeps
   its row; none is ever lost. Tool rows are one line across the row, cut at the
   end, with the chevron right after the label; the
   full text is in their details, which open at the rows' text inset and wrap
@@ -529,10 +530,12 @@ when an intentional design change is accepted.
   cells keep less padding. Each block's spacing depends only on the block before it, so streamed
   text never moves. Nothing moves when a turn settles: the dots hold the row
   Copy then takes, and parts with nothing to show draw nothing. In agent chats,
-  bot chats and the Forum alike, rows fade out before the window's floating
-  buttons at the top and before the composer at the bottom, and the
-  button back to the latest reply or post is a small round one centred above it,
-  over a band where nothing is legible.
+  bot chats and the Forum alike, the transcript uses the panel's whole height:
+  rows scroll up to the top edge, fading out over its last 6 points only, and
+  down behind the glass composer, which shows them through it. At the ends of a
+  chat the first row clears the floating buttons and the last rests above the
+  composer. The button back to the latest reply or post is a small round one
+  centred above the composer, on its own background.
 - **Scrolling:** hide scrollbars throughout the app while preserving scrolling. Set
   `.scrollIndicators(.never)` on SwiftUI scroll views and editors, including
   sheets and popovers. Disable both scrollers on AppKit `NSScrollView` editors.

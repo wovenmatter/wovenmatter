@@ -107,7 +107,7 @@ private struct ForumPane: View {
     @Environment(\.wovenTheme) private var theme
     @State private var attached: ForumRoomStore?
     @State private var following = true
-    /// The newest content is out of view or in the composer's fade.
+    /// The newest content is out of view or behind the composer stack.
     @State private var endObscured = false
     @State private var isUserScrolling = false
     @State private var shownPosts = ForumPane.postPage
@@ -300,7 +300,7 @@ private struct ForumPane: View {
                 guard !controller.loading, following, !isNewThread else { return }
                 jumpToEnd(proxy)
             }
-            .conversationEdges(topClearance: 0, stackHeight: bottomStackHeight, jumpLabel: following || !endObscured ? nil : "Latest post") {
+            .conversationEdges(stackHeight: bottomStackHeight, jumpLabel: following || !endObscured ? nil : "Latest post") {
                 following = true
                 jumpToEnd(proxy)
             }
@@ -452,6 +452,7 @@ private struct ForumPane: View {
                 .padding(.bottom, ConversationComposer.verticalPadding)
             }
         }
+        .conversationCoverSnapshot()
         .frame(maxWidth: .infinity)
         .padding(.horizontal, usesCompactSpacing ? 12 : 32)
         .padding(.top, 8)
