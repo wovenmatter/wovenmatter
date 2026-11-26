@@ -57,7 +57,9 @@ public enum ConversationHTMLDocument {
   /// growing. When the height keeps changing soon after each change of the
   /// viewport, the page stops reporting for a moment, so the frame stays
   /// still, and watches: a page that keeps changing is followed; one that
-  /// settles was answering the frame, and its height is held. A change while
+  /// settles was answering the frame, and its height is held. Heights that
+  /// come round again, however slowly the page answers, hold the tallest of
+  /// them until the page shows a height outside them. A change while
   /// the frame is still, a new width, or the reader pressing a pointer or key
   /// in the page lets a held height go. The first measurement is always
   /// reported.
@@ -154,15 +156,24 @@ public enum ConversationHTMLDocument {
       //   (real growth may have ended there).
       // A held height is let go by a change while the viewport is still, a
       // new width, or the reader pressing a pointer or key in the page.
-      // The first measurement is always reported.
+      // However slowly a page answers, heights that come round again (two or
+      // three of them, twice over) are a cycle: the frame holds the tallest
+      // and stops moving, and while it is still the page can only show those
+      // same heights unless it changes on its own; any other height is
+      // followed. The first measurement is always reported.
       const calm=350;
-      let last=-1,lastLead='',queued=false,ran=-1e9,width=0,tall=0,resized=-1e9,run=[],quiet=null,held=null;
+      let last=-1,lastLead='',queued=false,ran=-1e9,width=0,tall=0,resized=-1e9,run=[],quiet=null,held=null,sent=[];
+      const near=(a,b)=>Math.abs(a-b)<=1;
+      const cycle=h=>{const r=[...sent,h],n=r.length;
+        for(const p of [2,3])if(n>=2*p&&r.slice(n-p).every((x,i)=>near(x,r[n-2*p+i])))return r.slice(n-p);
+        return null;};
       const settle=h=>{const t=performance.now();
         if(innerHeight!==tall){if(tall)resized=t;tall=innerHeight;}
         const still=t-resized>=calm;
         if(last<0)return h;
+        if(held?.cycle){if(held.cycle.some(x=>near(x,h)))return held.h;held=null;run=[];sent=[];return h;}
         if(held){
-          if(h!==held.seen){if(still){held=null;run=[];return h;}held.seen=h;}
+          if(h!==held.seen){if(still){held=null;run=[];sent=[];return h;}held.seen=h;}
           if(h!==held.h&&held.spare){if(still){held.spare=false;return held.h=h;}setTimeout(schedule,resized+calm-t+5);}
           return held.h;}
         if(quiet){
@@ -172,16 +183,18 @@ public enum ConversationHTMLDocument {
           const q=quiet;quiet=null;run=[];
           held=q.turned?{h:Math.max(q.peak,last),seen:h,spare:false}:{h,seen:h,spare:true};return held.h;}
         if(h===last)return h;
+        const round=cycle(h);if(round){run=[];held={h:Math.max(...round),cycle:round};return held.h;}
         if(still){run=[];return h;}
         if(!run.length)run=[last];run.push(h);
         if(run.length<4)return h;
         const turned=run.some((x,i)=>i>1&&(x-run[i-1])*(run[i-1]-run[i-2])<0);
         quiet={h,moves:0,peak:Math.max(...run.slice(0,-1)),turned};setTimeout(schedule,25);return null;};
-      const release=()=>{held=null;run=[];quiet=null;};
+      const release=()=>{held=null;run=[];quiet=null;sent=[];};
       const measure=()=>{if(!queued)return;queued=false;ran=performance.now();const b=document.body;if(!b)return;
         if(innerWidth!==width){width=innerWidth;release();}
         const flow=document.documentElement.getBoundingClientRect().height,low=lowest();
         const h=settle(Math.ceil(Math.max(flow,low?low+(parseFloat(getComputedStyle(b).paddingBottom)||0):0))),l=lead();
+        if(h!==null&&h!==last)sent=[...sent.slice(-11),h];
         if(h!==null&&(h!==last||l!==lastLead)){last=h;lastLead=l;parent.postMessage({kind:'size',height:h,lead:l},'*');}};
       const schedule=()=>{if(queued)return;queued=true;const wait=ran+16-performance.now();
         if(wait>0)setTimeout(measure,wait);else{requestAnimationFrame(measure);setTimeout(measure,0);}};
