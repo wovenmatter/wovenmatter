@@ -2,6 +2,7 @@ import AppKit
 private typealias ResponseFont = NSFont
 private let responseAbsolute = NSTextBlock.ValueType.absoluteValueType
 import SwiftUI
+import WovenProtocol
 
 /// One selectable text surface and one copy action for the complete response.
 extension EnvironmentValues {
@@ -46,6 +47,8 @@ struct ConversationResponse: View {
     @Environment(\.conversationLinkHandler) private var linkHandler
     @State private var copied = false
     @State private var pendingExternalURL: URL?
+    /// The last file a link in the text asked to open.
+    @State private var fileOpenRequest: ConversationFileOpenRequest?
     /// The text as placed, measured once at its placed width, for the accessory.
     @State private var placed: ConversationPlacedText?
 
@@ -53,9 +56,15 @@ struct ConversationResponse: View {
         // Reasoning shows without the provider's own metadata lines.
         let shown = style == .reasoning || style == .plainReasoning ? ConversationResponseAttributedText.withoutProviderMarkup(content) : content
         let accessory = trailingAccessory.flatMap { _ in placed.map(accessoryPlacement) }
+        // The files the reply refers to, as chips under it once it settles; a
+        // link in the text to one of them opens it as its chip does.
+        let files = !showsCopyButton || isStreaming || showsRunningDots ? []
+            : fileRow.map { _ in ConversationFileRow.files(in: content) } ?? []
         VStack(alignment: .leading, spacing: 0) {
             ConversationResponseText(content: shown, isStreaming: isStreaming, style: style,
-                                     onPlaced: trailingAccessory == nil ? nil : { placed = $0 }) { url in
+                                     onPlaced: trailingAccessory == nil ? nil : { placed = $0 },
+                                     openableFiles: Set(files.compactMap { LibraryFileReference.path($0.source) }),
+                                     onOpenFile: { fileOpenRequest = ConversationFileOpenRequest(path: $0) }) { url in
                 // Page links only work where a handler routes them (bot chats).
                 if let linkHandler { linkHandler(url) } else if WovenAppLink(url) == nil { pendingExternalURL = url }
             }
@@ -78,14 +87,13 @@ struct ConversationResponse: View {
                 // Files the reply refers to follow Copy in the same row, which
                 // wraps, an entry gap under the text; with none the row is just
                 // Copy, close under it. The text above never moves for them.
-                let files = isStreaming || showsRunningDots ? [] : fileRow.map { _ in ConversationFileRow.files(in: content) } ?? []
                 ZStack(alignment: .leading) {
                     if showsRunningDots {
                         ConversationRunningDots()
                     } else if !isStreaming, let fileRow, !files.isEmpty {
                         FlowLayout(horizontalSpacing: ConversationMetrics.rowGap, verticalSpacing: ConversationMetrics.rowGap) {
                             copyButton.frame(height: ConversationMetrics.actionRowHeight)
-                            fileRow.chips(files)
+                            fileRow.chips(files, opening: fileOpenRequest)
                         }
                     } else if !isStreaming {
                         copyButton
@@ -164,6 +172,9 @@ private struct ConversationResponseText: NSViewRepresentable {
     let style: ConversationResponse.Style
     /// Told how the text is placed, once laid out at its placed width.
     var onPlaced: ((ConversationPlacedText) -> Void)?
+    /// The paths of the files with chips under the reply, and what opening one does.
+    var openableFiles: Set<String> = []
+    var onOpenFile: ((String) -> Void)?
     let onOpenLink: (URL) -> Void
 
     func makeNSView(context: Context) -> ConversationResponseViewport {
@@ -174,6 +185,7 @@ private struct ConversationResponseText: NSViewRepresentable {
         viewport.appearance = NSAppearance(named: colorScheme == .dark ? .darkAqua : .aqua)
         let textView = viewport.textView
         textView.onOpenLink = onOpenLink
+        textView.onOpenFile = onOpenFile
         textView.onPressWhileGrowing = isStreaming ? transcriptInteraction : nil
         textView.onSelect = transcriptInteraction
         viewport.onPlaced = onPlaced
@@ -181,6 +193,8 @@ private struct ConversationResponseText: NSViewRepresentable {
             viewport.invalidateIntrinsicContentSize()
             viewport.placeText()
         }
+        // After the text, so its links to files follow the chips as they are now.
+        textView.openableFiles = openableFiles
     }
 
     func sizeThatFits(_ proposal: ProposedViewSize, nsView: ConversationResponseViewport,
@@ -267,10 +281,21 @@ final class ConversationResponseViewport: NSView {
 
 /// TextKit owns selection across paragraphs, list items, code and table cells.
 /// It has no inner scroll view; wheel events continue through the transcript.
-final class ConversationResponseNativeTextView: NSTextView, NSTextViewDelegate, @preconcurrency NSLayoutManagerDelegate {
+final class ConversationResponseNativeTextView: NSTextView, NSTextViewDelegate, @preconcurrency NSLayoutManagerDelegate,
+    @preconcurrency NSTextStorageDelegate {
     // Bounds follow the viewport; text and selection retain document coordinates.
     override var textContainerOrigin: NSPoint { .zero }
     var onOpenLink: ((URL) -> Void)?
+    /// The paths of the files the reply's row has chips for: a link to one
+    /// of them is a link, and opening it is `onOpenFile`, what its chip does.
+    var openableFiles: Set<String> = [] {
+        didSet {
+            if openableFiles != oldValue, let textStorage {
+                linkFiles(in: NSRange(location: 0, length: textStorage.length), of: textStorage)
+            }
+        }
+    }
+    var onOpenFile: ((String) -> Void)?
     /// Hands the transcript's scroll to the reader while the reply grows.
     var onPressWhileGrowing: (@MainActor () -> Void)?
     /// The reader selected text, by pointer or keyboard: the transcript keeps it in view.
@@ -304,6 +329,7 @@ final class ConversationResponseNativeTextView: NSTextView, NSTextViewDelegate, 
         storage.addLayoutManager(layoutManager)
         layoutManager.addTextContainer(container)
         super.init(frame: .zero, textContainer: container)
+        storage.delegate = self
         isEditable = false
         isSelectable = true
         isRichText = true
@@ -604,6 +630,8 @@ final class ConversationResponseNativeTextView: NSTextView, NSTextViewDelegate, 
                     WovenColors.primary.withAlphaComponent(0.05).setFill()
                     NSBezierPath(roundedRect: rect, xRadius: ConversationMetrics.blockRadius,
                                  yRadius: ConversationMetrics.blockRadius).fill()
+                    drawWrapMarks(NSIntersectionRange(glyphs, visibleGlyphs), boxText: block.indent + ConversationMetrics.blockInset,
+                                  layoutManager: layoutManager, text: textStorage)
                 case .responseQuote:
                     let end = NSMaxRange(decoration.range) - 1
                     let endStyle = textStorage.attribute(.paragraphStyle, at: end, effectiveRange: nil) as? NSParagraphStyle
@@ -675,6 +703,34 @@ final class ConversationResponseNativeTextView: NSTextView, NSTextViewDelegate, 
             let rect = NSRect(x: minX, y: baseline - font.ascender - 1,
                               width: bounds.maxX + ConversationMetrics.hair - minX, height: font.ascender - font.descender + 2)
             NSBezierPath(roundedRect: rect, xRadius: ConversationMetrics.tight, yRadius: ConversationMetrics.tight).fill()
+        }
+    }
+
+    /// A quiet wrap mark before each wrapped code line's first character, in
+    /// its hanging indent and never left of the box's text edge `boxText`:
+    /// drawn, not text, so selection and copying never see it.
+    private func drawWrapMarks(_ glyphs: NSRange, boxText: CGFloat, layoutManager: NSLayoutManager, text: NSTextStorage) {
+        guard glyphs.length > 0 else { return }
+        let characters = text.string as NSString
+        var index = glyphs.location
+        while index < NSMaxRange(glyphs) {
+            var line = NSRange()
+            let fragment = layoutManager.lineFragmentRect(forGlyphAt: index, effectiveRange: &line)
+            index = NSMaxRange(line)
+            let first = layoutManager.characterIndexForGlyph(at: line.location)
+            // A line that starts a paragraph is a line of the code, not a wrap.
+            guard first > 0, characters.character(at: first - 1) != 0x0A,
+                  let code = text.attribute(.font, at: first, effectiveRange: nil) as? NSFont, code.isFixedPitch else { continue }
+            let font = NSFont.systemFont(ofSize: (code.pointSize * 0.85).rounded())
+            let mark = NSAttributedString(string: "↪", attributes: [
+                .font: font, .foregroundColor: WovenColors.foreground.withAlphaComponent(0.3)])
+            let size = mark.size()
+            let textStart = layoutManager.lineFragmentUsedRect(forGlyphAt: line.location, effectiveRange: nil).minX
+            let baseline = fragment.minY + layoutManager.location(forGlyphAt: line.location).y
+            // Centred on the code's x-height, a little before its text.
+            let x = max(boxText, textStart - size.width - ConversationMetrics.hair)
+            let markBaseline = baseline - code.xHeight / 2 + font.xHeight / 2
+            mark.draw(at: NSPoint(x: x, y: markBaseline - font.ascender))
         }
     }
 
@@ -755,11 +811,34 @@ final class ConversationResponseNativeTextView: NSTextView, NSTextViewDelegate, 
         self.layoutManager(layoutManager, shouldBreakLineByWordBeforeCharacterAt: charIndex)
     }
 
+    /// Text that changes keeps its links to files that have chips.
+    func textStorage(_ textStorage: NSTextStorage, willProcessEditing editedMask: NSTextStorageEditActions,
+                     range editedRange: NSRange, changeInLength delta: Int) {
+        if editedMask.contains(.editedCharacters) { linkFiles(in: editedRange, of: textStorage) }
+    }
+
+    /// Makes each link to a file in `range` a link when the reply's file row
+    /// has a chip for it, and plain text when it has none.
+    private func linkFiles(in range: NSRange, of storage: NSTextStorage) {
+        storage.enumerateAttribute(.responseFileLink, in: range) { value, part, _ in
+            guard let path = value as? String else { return }
+            if openableFiles.contains(path) {
+                storage.addAttribute(.link, value: URL(fileURLWithPath: path), range: part)
+            } else {
+                storage.removeAttribute(.link, range: part)
+            }
+        }
+    }
+
     func textViewDidChangeSelection(_ notification: Notification) {
         if !applying, selectedRange().length > 0 { onSelect?() }
     }
 
     func textView(_ textView: NSTextView, clickedOnLink link: Any, at charIndex: Int) -> Bool {
+        if let path = textStorage?.attribute(.responseFileLink, at: charIndex, effectiveRange: nil) as? String {
+            if openableFiles.contains(path) { onOpenFile?(path) }
+            return true
+        }
         let url = (link as? URL) ?? (link as? String).flatMap(URL.init(string:))
         if let url, ConversationMarkdownDocument.isLiveLink(url) { onOpenLink?(url) }
         // Always consume the click; opening still requires the existing confirmation.
@@ -785,6 +864,8 @@ private extension NSAttributedString.Key {
     static let responseTaskBox = Self("WovenMatterResponseTaskBox")
     /// Text a line does not break inside (short inline code), as a `ResponseNoBreak`.
     static let responseNoBreak = Self("WovenMatterResponseNoBreak")
+    /// The text of a link to a local file, as the file's path.
+    static let responseFileLink = Self("WovenMatterResponseFileLink")
     /// Characters only layout needs: the spacer above a box that opens the
     /// text and the line break kept after one that ends it. Selection skips them.
     static let responseLayoutOnly = Self("WovenMatterResponseLayoutOnly")
@@ -910,10 +991,10 @@ private enum ConversationResponseAttributedText {
                 if let link = run.link {
                     if ConversationMarkdownDocument.isLiveLink(link) {
                         attributes[.link] = link
-                    } else if link.scheme == nil || link.isFileURL, !link.path.isEmpty {
-                        // A link to a local file reads as a link; the reply's
-                        // file chip is what opens it.
-                        attributes[.foregroundColor] = WovenColors.success
+                    } else if let path = LibraryFileReference.path(link.absoluteString) {
+                        // A link to a local file is a link only while the reply
+                        // has a chip for that file (see `openableFiles`).
+                        attributes[.responseFileLink] = path
                     }
                 }
                 result.append(NSAttributedString(string: string, attributes: attributes))

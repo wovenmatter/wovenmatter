@@ -14,13 +14,23 @@ struct ConversationFileRow {
         LibraryLinkDiscovery.links(in: content).filter { LibraryFileReference.path($0.source) != nil }
     }
 
-    /// One chip per file, each with its own actions.
-    func chips(_ files: [LibraryAsset]) -> some View {
-        ForEach(files, id: \.source) { file in
+    /// One chip per file, each with its own actions. A link in the reply's
+    /// text to a file opens the first chip for that file's path.
+    func chips(_ files: [LibraryAsset], opening request: ConversationFileOpenRequest? = nil) -> some View {
+        let target = request.flatMap { request in files.first { LibraryFileReference.path($0.source) == request.path }?.source }
+        return ForEach(files, id: \.source) { file in
             ConversationFileAttachment(file: file, identity: WorkspaceLibraryItem.identifier(
-                messageID: messageID, source: file.source), resolve: { try await resolveFile(file.source) })
+                messageID: messageID, source: file.source), resolve: { try await resolveFile(file.source) },
+                openRequest: file.source == target ? request : nil)
         }
     }
+}
+
+/// A link in a reply's text asking its file's chip to do what clicking the
+/// chip does. Each click is a new request.
+struct ConversationFileOpenRequest: Equatable {
+    let path: String
+    let id = UUID()
 }
 
 struct ConversationFileAttachment: View {
@@ -31,6 +41,7 @@ struct ConversationFileAttachment: View {
     let file: LibraryAsset
     let identity: String
     let resolve: () async throws -> URL
+    var openRequest: ConversationFileOpenRequest?
     @State private var url: URL?
     @State private var error: String?
     @State private var loading = false
@@ -38,7 +49,7 @@ struct ConversationFileAttachment: View {
     var body: some View {
         VStack(alignment: .leading, spacing: ConversationMetrics.tight) {
             HStack(spacing: ConversationMetrics.hair) {
-                Button { perform { openPreview?($0, "library:" + identity) } } label: {
+                Button { preview() } label: {
                     Label(url?.lastPathComponent ?? file.title,
                           systemImage: file.kind == .photo ? "photo" : "doc.richtext")
                         .font(.system(size: 12, weight: .medium)).lineLimit(1).truncationMode(.middle)
@@ -80,6 +91,11 @@ struct ConversationFileAttachment: View {
             .disabled(loading)
             if let error { Text(error).font(.caption).foregroundStyle(WovenPalette.mutedForeground) }
         }
+        .onChange(of: openRequest) { _, request in if request != nil { preview() } }
+    }
+
+    private func preview() {
+        perform { openPreview?($0, "library:" + identity) }
     }
 
     // Launch Services can identify the associated app from the filename without

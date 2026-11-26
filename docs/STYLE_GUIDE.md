@@ -493,14 +493,17 @@ when an intentional design change is accepted.
   wide as it asked to be, with a small inset inside it; its controls show on
   hover, while zoomed, or with focus. Under the reply, Copy and the files it
   refers to share one wrapping row, as tall as a file chip in every state and
-  an entry gap below the text when it holds files. In reply text,
+  an entry gap below the text when it holds files; a link in the text to one
+  of those files opens it as its chip does, and one to a file without a chip
+  stays plain text. In reply text,
   lists sit tighter than paragraphs, with one gap between every two items at
   every level, whether they wrap or not, two different lists in a row are spaced as
   paragraphs, every item keeps its marker, a task's box is one drawn square,
   filled with a check or outlined, headings attach to what follows them, and
   code, tables and quotes keep the same space on each side and start at their
   block's indent. A code line that wraps continues two cells right of its own
-  indent, never past half the box. Inline code is shaded around its own text on each line, a
+  indent, never past half the box, after a quiet wrap mark drawn in that
+  indent. Inline code is shaded around its own text on each line, a
   little smaller than the text it sits in, in a table cell too. Table
   columns fit their content, never narrower than short code or a short value
   they keep whole; a table nearly as wide as the text fills it, and one too

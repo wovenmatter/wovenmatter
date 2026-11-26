@@ -1,4 +1,5 @@
 import Foundation
+import WovenProtocol
 
 /// Links from chat to pages inside Woven Matter (bots point users at Settings with them).
 /// Only these exact links are live; any other `wovenmatter:` link stays plain text.
@@ -20,6 +21,9 @@ struct ConversationMarkdownDocument: Sendable {
 
     /// Clickable in a response: a safe external link or a Woven Matter page link.
     static func isLiveLink(_ url: URL) -> Bool { isSafeExternalLink(url) || WovenAppLink(url) != nil }
+
+    /// A link to a local file, as the reply's file chips are found.
+    static func isFileLink(_ url: URL) -> Bool { LibraryFileReference.path(url.absoluteString) != nil }
 
     static func isSafeExternalLink(_ url: URL) -> Bool {
         guard let scheme = url.scheme?.lowercased() else { return false }
@@ -46,9 +50,12 @@ struct ConversationMarkdownDocument: Sendable {
                     options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)
                 )
             ) ?? AttributedString(source)
+            // A link to a local file stays for the renderer to match against
+            // the reply's file chips; it never opens on its own.
             let unsafeLinkRanges: [Range<AttributedString.Index>] = rendered.runs.compactMap { run in
                 guard let link = run.link,
-                      ConversationMarkdownDocument.isLiveLink(link) == false else {
+                      ConversationMarkdownDocument.isLiveLink(link) == false,
+                      ConversationMarkdownDocument.isFileLink(link) == false else {
                     return nil
                 }
                 return run.range
