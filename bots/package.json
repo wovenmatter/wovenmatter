@@ -17,12 +17,12 @@
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": ">=0.3.332",
-    "@earendil-works/chord": ">=1.6.1",
-    "@earendil-works/pi-ai": ">=1.6.1",
-    "@earendil-works/pi-durable": ">=1.6.1",
+    "@earendil-works/chord": ">=1.7.0",
+    "@earendil-works/pi-ai": ">=1.7.0",
+    "@earendil-works/pi-durable": ">=1.7.0",
     "typebox": ">=1.4.7",
     "undici": ">=8.13.1",
-    "ws": ">=8.23.0",
+    "ws": ">=8.23.1",
     "zod": ">=4.6.7"
   },
   "devDependencies": {
