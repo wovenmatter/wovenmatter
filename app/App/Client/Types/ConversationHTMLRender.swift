@@ -166,8 +166,9 @@ public enum ConversationHTMLDocument {
       // followed. A cycle may also be the page's own and over, so once the
       // page has shown a shorter height of it for `wait` the frame tries that
       // height. If the page then changes to another height of the cycle, it
-      // answered: the frame holds the tallest again and waits twice as long
-      // before the next try. After each move of the frame, the page's changes
+      // answered: the frame holds the tallest again and, if the page settles
+      // shorter, tries again after twice as long, so the frame never rests
+      // for good above the page's settled height. After each move of the frame, the page's changes
       // are its answer (`answering`), however late the first comes, until one
       // has been followed by `calm` without another (`heard` notes the first),
       // so every step of an answer in several steps is still an answer. Only
@@ -192,7 +193,7 @@ public enum ConversationHTMLDocument {
           if(!near(h,H.seen)){
             if(H.heard&&t-H.at>=calm)H.answering=false;
             const own=!H.answering;H.heard=true;H.seen=h;H.at=t;
-            if(H.out){H.out=false;H.wait=Math.min(H.wait*2,256*rest);H.answering=true;H.heard=false;return H.h;}
+            if(H.out){H.out=false;H.armed=true;H.wait=Math.min(H.wait*2,256*rest);H.answering=true;H.heard=false;return H.h;}
             if(own)H.armed=true;}
           if(H.out)return last;
           if(H.armed&&H.seen<H.h&&!near(H.seen,H.h)){
