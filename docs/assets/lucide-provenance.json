@@ -1,9 +1,9 @@
 {
   "package": "lucide-static",
-  "version": "1.80.0",
-  "tarball": "https://registry.npmjs.org/lucide-static/-/lucide-static-1.80.0.tgz",
-  "integrity": "sha512-RB4WCODLshIIEYhKQsbJKhNvzKpkkIHvL1xwIDLL6uJJ5Qg14NPgA2eXETVyvx+r4Md1zTH9gkeb5Cn3EwLD2A==",
-  "source": "https://github.com/lucide-icons/lucide/tree/1.80.0",
+  "version": "1.82.0",
+  "tarball": "https://registry.npmjs.org/lucide-static/-/lucide-static-1.82.0.tgz",
+  "integrity": "sha512-Xzzpfkx06hHXjXoLWOk1RWg52OhfaRcIOIK72hCbRty8Jq29WQUV4J4Z9GvjAKDoPxGf7tlcqBbJX4qrr1U8+w==",
+  "source": "https://github.com/lucide-icons/lucide/tree/1.82.0",
   "transform": "Retain asset names, 24-point view boxes, black template strokes, and existing stroke widths; omit CSS classes.",
   "assets": {
     "app/App/SharedAssets.xcassets/Lucide/lucide-arrow-down-s25.imageset/lucide-arrow-down-s25.svg": {
@@ -216,7 +216,7 @@
     },
     "app/App/SharedAssets.xcassets/Lucide/lucide-smartphone-s15.imageset/lucide-smartphone-s15.svg": {
       "upstream": "smartphone.svg",
-      "sha256": "94a7d77da2d0ed927294df43e90cd273b6196054da20ecf84edaf7786a898a91"
+      "sha256": "b8d73729b44508f86ebbba8d9bdedc920b6fdc4565c597b2417eb55c7e56eee1"
     },
     "app/App/SharedAssets.xcassets/Lucide/lucide-sparkles-s15.imageset/lucide-sparkles-s15.svg": {
       "upstream": "sparkles.svg",
