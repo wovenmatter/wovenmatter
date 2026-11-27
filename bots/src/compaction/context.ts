@@ -289,16 +289,16 @@ export class NativeCompaction {
   }
 
   /** `pi.compaction` → `beforeCompact`. */
-  readonly beforeCompact = async (
+  readonly beforeCompact: NonNullable<import("@earendil-works/pi-durable").CompactionHooks["beforeCompact"]> = async (
     compaction: Compaction,
     api: HookApi,
     ctx: HookContext,
-  ): Promise<{ decline: true } | { summary: string } | undefined> => {
+  ) => {
     const saved = (await api.snapshot(NativeContextDoc, api.conversationId, ctx)) ?? {
       covered: [],
     };
     // The window and its receipt commit together, so a retried task completes without recompacting.
-    if (saved.receipt?.taskId === (api.taskId as unknown as number)) return { decline: true };
+    if (saved.receipt?.taskId === (api.taskId as unknown as number)) return { kind: "decline" };
     const model = await this.#model(api, ctx);
     if (!model) return undefined;
     const conversation = await this.harness.conversation(api.conversationId);
@@ -352,7 +352,7 @@ export class NativeCompaction {
             route: outcome.route,
             window: outcome.window,
           });
-          return { decline: true };
+          return { kind: "decline" };
         }
         this.#options.onReport?.(new Error(outcome.unsupported), {
           kind: "native-compaction-unsupported",
@@ -382,7 +382,7 @@ export class NativeCompaction {
       const current = await tx.doc(NativeContextDoc, conversation.id);
       delete current.active;
     }, ctx);
-    return { summary };
+    return { kind: "summary", summary };
   };
 
   async #commit(
