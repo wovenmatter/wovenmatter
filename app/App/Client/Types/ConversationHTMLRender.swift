@@ -159,24 +159,29 @@ public enum ConversationHTMLDocument {
       //   (real growth may have ended there).
       // A held height is let go by a change while the viewport is still, a
       // new width, or the reader pressing a pointer or key in the page.
-      // However slowly a page answers, heights that come round again (two or
-      // three of them, twice over) are a cycle: the frame holds the tallest
+      // However slowly a page answers, heights that come round again (two to
+      // four of them, twice over) are a cycle: the frame holds the tallest
       // and stops moving, and while it is still the page can only show those
       // same heights unless it changes on its own; any other height is
       // followed. A cycle may also be the page's own and over, so once the
       // page has shown a shorter height of it for `wait` the frame tries that
-      // height. The page answers each resize with at most its next change
-      // (`answered`): if that answer is another height of the cycle, the
-      // frame holds the tallest again and waits twice as long before the next
-      // try; nothing else counts as an answer. Any further change before the
-      // frame moves again is the page's own and allows another try. While a
-      // try is out, heights within a pixel of it are the same height. The
-      // first measurement is always reported.
+      // height. If the page then changes to another height of the cycle, it
+      // answered: the frame holds the tallest again and waits twice as long
+      // before the next try. After each move of the frame, the page's changes
+      // are its answer (`answering`), however late the first comes, until one
+      // has been followed by `calm` without another (`heard` notes the first),
+      // so every step of an answer in several steps is still an answer. Only
+      // a change after that counts as the page's own and allows another try.
+      // While a try is out, heights
+      // within a pixel of it are the same height. One timer stands for every
+      // measurement put off for later. The first measurement is always
+      // reported.
       const calm=350,rest=1000;
-      let last=-1,lastLead='',queued=false,ran=-1e9,width=0,tall=0,resized=-1e9,run=[],quiet=null,held=null,sent=[];
+      let last=-1,lastLead='',queued=false,ran=-1e9,width=0,tall=0,resized=-1e9,run=[],quiet=null,held=null,sent=[],timer=0;
+      const later=ms=>{clearTimeout(timer);timer=setTimeout(schedule,Math.max(0,ms));};
       const near=(a,b)=>Math.abs(a-b)<=1;
       const cycle=h=>{const r=[...sent,h],n=r.length;
-        for(const p of [2,3])if(n>=2*p&&r.slice(n-p).every((x,i)=>near(x,r[n-2*p+i])))return r.slice(n-p);
+        for(const p of [2,3,4])if(n>=2*p&&r.slice(n-p).every((x,i)=>near(x,r[n-2*p+i])))return r.slice(n-p);
         return null;};
       const settle=h=>{const t=performance.now();
         if(innerHeight!==tall){if(tall)resized=t;tall=innerHeight;}
@@ -184,33 +189,35 @@ public enum ConversationHTMLDocument {
         if(last<0)return h;
         if(held?.cycle){const H=held;
           if(!H.cycle.some(x=>near(x,h))){held=null;run=[];sent=[];return h;}
-          if(!near(h,H.seen)){const answer=!H.answered;H.answered=true;H.seen=h;H.at=t;
-            if(H.out){H.out=false;H.wait=Math.min(H.wait*2,32*rest);H.answered=near(H.h,last);return H.h;}
-            if(!answer)H.armed=true;}
+          if(!near(h,H.seen)){
+            if(H.heard&&t-H.at>=calm)H.answering=false;
+            const own=!H.answering;H.heard=true;H.seen=h;H.at=t;
+            if(H.out){H.out=false;H.wait=Math.min(H.wait*2,256*rest);H.answering=true;H.heard=false;return H.h;}
+            if(own)H.armed=true;}
           if(H.out)return last;
           if(H.armed&&H.seen<H.h&&!near(H.seen,H.h)){
-            if(t-H.at<H.wait){setTimeout(schedule,H.at+H.wait-t+5);return H.h;}
-            H.armed=false;H.out=true;H.answered=false;return H.seen;}
+            if(t-H.at<H.wait){later(H.at+H.wait-t+5);return H.h;}
+            H.armed=false;H.out=true;H.answering=true;H.heard=false;return H.seen;}
           return H.h;}
         if(held){
           if(h!==held.seen){if(still){held=null;run=[];sent=[];return h;}held.seen=h;}
-          if(h!==held.h&&held.spare){if(still){held.spare=false;return held.h=h;}setTimeout(schedule,resized+calm-t+5);}
+          if(h!==held.h&&held.spare){if(still){held.spare=false;return held.h=h;}later(resized+calm-t+5);}
           return held.h;}
         if(quiet){
-          if(h!==quiet.h){if(!still&&++quiet.moves<2){quiet.h=h;setTimeout(schedule,25);return null;}
+          if(h!==quiet.h){if(!still&&++quiet.moves<2){quiet.h=h;later(25);return null;}
             quiet=null;run=[];return h;}
-          if(!still){setTimeout(schedule,25);return null;}
+          if(!still){later(25);return null;}
           const q=quiet;quiet=null;run=[];
           held=q.turned?{h:Math.max(q.peak,last),seen:h,spare:false}:{h,seen:h,spare:true};return held.h;}
         if(h===last)return h;
         const round=cycle(h);if(round){run=[];const top=Math.max(...round);
-          held={h:top,cycle:round,seen:h,at:t,armed:true,out:false,answered:near(top,last),wait:rest};
-          if(!near(h,top))setTimeout(schedule,rest+5);return top;}
+          held={h:top,cycle:round,seen:h,at:t,armed:true,out:false,wait:rest,answering:true,heard:near(top,last)};
+          if(!near(h,top))later(rest+5);return top;}
         if(still){run=[];return h;}
         if(!run.length)run=[last];run.push(h);
         if(run.length<4)return h;
         const turned=run.some((x,i)=>i>1&&(x-run[i-1])*(run[i-1]-run[i-2])<0);
-        quiet={h,moves:0,peak:Math.max(...run.slice(0,-1)),turned};setTimeout(schedule,25);return null;};
+        quiet={h,moves:0,peak:Math.max(...run.slice(0,-1)),turned};later(25);return null;};
       const release=()=>{held=null;run=[];quiet=null;sent=[];};
       const measure=()=>{if(!queued)return;queued=false;ran=performance.now();const b=document.body;if(!b)return;
         if(innerWidth!==width){width=innerWidth;release();}
