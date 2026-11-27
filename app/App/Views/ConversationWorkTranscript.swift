@@ -1871,7 +1871,7 @@ private extension ConversationToolAction {
         case .codeSearch, .search: "magnifyingglass"
         case .visual, .preview: "chart.bar.doc.horizontal"
         case .list: "folder"
-        case .webSearch, .webFetch, .browser: "globe"
+        case .webSearch, .webFetch, .findInPage, .browser: "globe"
         case .computer: "desktopcomputer"
         case .delegate: "person.2"
         case .question: "questionmark.bubble"

@@ -404,6 +404,8 @@ public enum ConversationToolAction: Hashable, Sendable {
   case preview
   case webSearch
   case webFetch
+  /// Finding text in a web page (Codex's find in page).
+  case findInPage
   case browser
   case computer
   case delegate
@@ -438,6 +440,10 @@ public enum ConversationToolAction: Hashable, Sendable {
       self = .browser
     } else if name.contains("computer") {
       self = .computer
+    } else if (activity.workTimelineInput?["action"] as? [String: Any])?["type"] as? String == "findInPage" {
+      // Codex's search inside a page, told by the step it reports before
+      // any page it names.
+      self = .findInPage
     } else if let step = activity.workTimelineInput?["action"] as? [String: Any],
               step["url"] != nil || (step["type"] as? String)?.lowercased().contains("search") == true {
       // A search tool that reports a web step: a query, or a page it opened.
@@ -527,6 +533,7 @@ public enum ConversationToolAction: Hashable, Sendable {
     case .preview: plural ? "previews" : "preview"
     case .webSearch: plural ? "web searches" : "web search"
     case .webFetch: plural ? "fetches" : "fetch"
+    case .findInPage: plural ? "finds" : "find"
     case .browser: plural ? "browser steps" : "browser step"
     case .computer: plural ? "computer steps" : "computer step"
     case .delegate: plural ? "tasks" : "task"
@@ -567,6 +574,7 @@ public enum ConversationToolAction: Hashable, Sendable {
     case .preview: plural ? "Ran \(count) previews" : "Previewed a visual reply"
     case .webSearch: plural ? "Ran \(count) web searches" : "Searched the web"
     case .webFetch: "Fetched \(count) web \(plural ? "pages" : "page")"
+    case .findInPage: "Found text in \(count) \(plural ? "pages" : "page")"
     case .browser: plural ? "Took \(count) browser steps" : "Used the browser"
     case .computer: plural ? "Took \(count) computer steps" : "Used the computer"
     case .delegate: "Delegated \(count) \(plural ? "tasks" : "task")"
@@ -611,6 +619,7 @@ public enum ConversationToolAction: Hashable, Sendable {
     case .preview: "\(count) \(plural ? "previews" : "preview")"
     case .webSearch: "\(count) web \(searches)"
     case .webFetch: "\(count) \(plural ? "pages" : "page") fetched"
+    case .findInPage: "\(count) \(plural ? "finds" : "find")"
     case .browser: "\(count) browser \(plural ? "steps" : "step")"
     case .computer: "\(count) computer \(plural ? "steps" : "step")"
     case .delegate: "\(count) \(plural ? "tasks" : "task")"
@@ -632,6 +641,7 @@ public enum ConversationToolAction: Hashable, Sendable {
     case .preview: active ? "Previewing a visual reply" : "Previewed a visual reply"
     case .webSearch: active ? "Searching the web" : "Searched the web"
     case .webFetch: active ? "Fetching a web page" : "Fetched a web page"
+    case .findInPage: active ? "Finding in page" : "Found in page"
     case .browser: active ? "Using the browser" : "Used the browser"
     case .computer: active ? "Using the computer" : "Used the computer"
     case .delegate: active ? "Delegating a task" : "Delegated a task"
@@ -844,12 +854,12 @@ public extension AgentRunActivity {
     return (input?["query"] as? String)?.workTimelineSingleLine
   }
 
-  /// The page a fetch opened, without its scheme: its input's `url`, or the
-  /// one Codex's open-page action names.
+  /// The page a fetch opened or a find searched, without its scheme: its
+  /// input's `url`, or the one Codex's open-page or find-in-page action names.
   var workTimelineWebPage: String? {
     let input = workTimelineInput
     let step = input?["action"] as? [String: Any]
-    if let step, step["type"] as? String != "openPage" { return nil }
+    if let step, !["openPage", "findInPage"].contains(step["type"] as? String ?? "") { return nil }
     guard let url = ((step?["url"] ?? input?["url"]) as? String)?.workTimelineSingleLine else { return nil }
     // Without its scheme, and without a user and password before the host.
     return url.replacingOccurrences(of: #"^[A-Za-z][A-Za-z0-9+.-]*://"#, with: "", options: .regularExpression)
@@ -868,22 +878,45 @@ public extension AgentRunActivity {
   /// Only such a command may show in the row; a tool's name as the title
   /// ("Bash", "Terminal") leaves only the program to show, since arguments
   /// can carry credentials. Without a command in the input, a title of
-  /// several words is the command.
+  /// several words is the command. A command the runtime ran through a
+  /// shell (`/bin/zsh -lc "…"`, which Codex titles as the quoted inner
+  /// command) is the inner command.
   var workTimelineTitledCommand: String? {
-    guard let command = workTimelineInput?["command"] as? String else {
+    guard let given = workTimelineInput?["command"] as? String else {
       return title?.workTimelineSingleLine?.contains(" ") == true ? title : nil
     }
-    guard let line = command.workTimelineSingleLine, var label = title?.workTimelineSingleLine else { return nil }
-    if line == label { return command }
-    for mark in ["\u{2026}", "..."] where label.hasSuffix(mark) {
-      label = String(label.dropLast(mark.count)).trimmingCharacters(in: .whitespaces)
+    guard let title = title?.workTimelineSingleLine else { return nil }
+    func titled(_ command: String, _ title: String) -> String? {
+      guard let line = command.workTimelineSingleLine else { return nil }
+      if line == title { return command }
+      var label = title
+      for mark in ["\u{2026}", "..."] where label.hasSuffix(mark) {
+        label = String(label.dropLast(mark.count)).trimmingCharacters(in: .whitespaces)
+      }
+      return label.contains(" ") && line.hasPrefix(label) ? command : nil
     }
-    return label.contains(" ") && line.hasPrefix(label) ? command : nil
+    if let command = titled(given, title) { return command }
+    guard let script = given.workTimelineShellScript else { return nil }
+    let unquoted = title.count > 1 && title.hasPrefix("\"") && title.hasSuffix("\"") ? String(title.dropFirst().dropLast()) : title
+    return titled(script, unquoted)
   }
 
-  /// The row's label is the command line itself, not words about a step.
+  /// The row's label is the command line itself, not words about a step:
+  /// the label code and this flag both read `workTimelineCommandText`.
   var workTimelineLabelIsCommand: Bool {
-    kind == .tool && ConversationToolAction(self) == .command && workTimelineTitledCommand.map { $0.workTimelineScript == nil } == true
+    workTimelineCommandText(root: nil) != nil
+  }
+
+  /// The command text a command row shows as its label, or nil when its
+  /// label is words: the command its runtime titled it with (never a
+  /// script's, which reads as the script), or, without one in its input,
+  /// its title of several words.
+  fileprivate func workTimelineCommandText(root: String?) -> String? {
+    guard kind == .tool, ConversationToolAction(self) == .command else { return nil }
+    if let command = workTimelineTitledCommand {
+      return command.workTimelineScript == nil ? command.workTimelineCommandLine(root: root) : nil
+    }
+    return workTimelineTitlePhrase.map { (title ?? $0).workTimelineCommandLine(root: root) }
   }
 
   /// A harness's own helper, named for what it does rather than by its
@@ -952,17 +985,15 @@ public extension AgentRunActivity {
     // folder plumbing around it. A runtime may cut a long command short to
     // title it: show the whole command, which the row truncates in the
     // middle, keeping its real end. Any other title keeps the program only.
-    if action == .command, let command = workTimelineTitledCommand {
-      if let script = command.workTimelineScript {
-        // Failed as a script run in code mode fails ("Code failed"); when
-        // more ran after the script, which step failed is not known, so the
-        // row says what ran and the failure stays the command's.
-        let done = failed && !script.more ? script.language.prefix(1).uppercased() + script.language.dropFirst() + " script failed"
-          : (active ? "Running a " : "Ran a ") + script.language + " script"
-        return done + (script.more ? " \u{2026}" : "")
-      }
-      return command.workTimelineCommandLine(root: root)
+    if action == .command, let script = workTimelineTitledCommand?.workTimelineScript {
+      // Failed as a script run in code mode fails ("Code failed"); when
+      // more ran after the script, which step failed is not known, so the
+      // row says what ran and the failure stays the command's.
+      let done = failed && !script.more ? script.language.prefix(1).uppercased() + script.language.dropFirst() + " script failed"
+        : (active ? "Running a " : "Ran a ") + script.language + " script"
+      return done + (script.more ? " \u{2026}" : "")
     }
+    if let text = workTimelineCommandText(root: root) { return text }
     if let helper = workTimelineHelper { return helper.label(active: active, failed: failed) }
     if workTimelineIsUncheckedSearch { return failed ? "Failed to search files" : active ? "Searching files" : "Searched files" }
     if workTimelineIsDelegation {
@@ -1016,6 +1047,12 @@ public extension AgentRunActivity {
       return (failed ? "Failed to search the web" : active ? "Searching the web" : "Searched the web")
         + (workTimelineWebQuery.map { " for \u{201C}\($0)\u{201D}" } ?? "")
     }
+    // A find in a page says what it found where, when both are reported.
+    if action == .findInPage {
+      let pattern = ((input?["action"] as? [String: Any])?["pattern"] as? String)?.workTimelineSingleLine
+      guard let pattern, let page = workTimelineWebPage else { return failed ? "Failed to find in page" : action.liveLabel(active: active) }
+      return (failed ? "Failed to find" : active ? "Finding" : "Found") + " \u{201C}\(pattern)\u{201D} in \(page)"
+    }
     let step = (input?["action"] as? [String: Any])?["type"] as? String
     if action == .webFetch, step == nil || step == "openPage" {
       guard let page = workTimelineWebPage else { return failed ? "Failed to fetch a web page" : action.liveLabel(active: active) }
@@ -1030,7 +1067,7 @@ public extension AgentRunActivity {
     // Keep a provider's descriptive title; bare function names gain readable
     // action labels below.
     if let phrase = workTimelineTitlePhrase {
-      return action == .command ? (title ?? phrase).workTimelineCommandLine(root: root) : phrase
+      return phrase
     }
     func argument(_ key: String) -> String? {
       (input?[key] as? String)?.workTimelineSingleLine.map { String($0.prefix(120)) }
@@ -1255,6 +1292,26 @@ extension String {
     if let parts = match(#"^(python3?|node|ruby|bash|sh|zsh) +(-[ce]) +'[^']*'$"#, command), inlineFlag[parts[1]] == parts[2],
        let language = languages[parts[1]] {
       return (language, false)
+    }
+    return nil
+  }
+
+  /// The command a shell is given to run, when that is all this is
+  /// (`/bin/zsh -lc "…"`, `bash -c '…'`), as the shell reads its quotes.
+  var workTimelineShellScript: String? {
+    let shell = #"^(?:/(?:usr/)?bin/)?(?:zsh|bash|sh) +-l?c +"#
+    if let range = range(of: shell + #""((?:[^"\\]|\\[\s\S])*)"$"#, options: .regularExpression) {
+      let quoted = String(self[range]).replacingOccurrences(of: shell + "\"", with: "", options: .regularExpression).dropLast()
+      // Inside double quotes a backslash escapes only `"`, `\`, `$` and a backquote.
+      return String(quoted).replacingOccurrences(of: #"\\(["\\$`])"#, with: "$1", options: .regularExpression)
+    }
+    if let range = range(of: shell + #"'([^']*)'$"#, options: .regularExpression) {
+      return String(String(self[range]).replacingOccurrences(of: shell + "'", with: "", options: .regularExpression).dropLast())
+    }
+    // Codex reports the shell's arguments joined as they were, unescaped:
+    // the script is everything between the first quote and the last.
+    if let range = range(of: shell + #""[\s\S]*"$"#, options: .regularExpression) {
+      return String(String(self[range]).replacingOccurrences(of: shell + "\"", with: "", options: .regularExpression).dropLast())
     }
     return nil
   }
