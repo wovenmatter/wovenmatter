@@ -21,10 +21,11 @@ struct CloudConversation: View {
     let attachments: [AgentMessageAttachmentDraft]
     let sendInProgress: Bool
     let startsComposerCollapsed: Bool
-    let usesCompactPanelSpacing: Bool
     let showsClosePanel: Bool
     let showsAddPanel: Bool
     let focusRequestGeneration: Int?
+    /// The panel debug requests that act on one chat (`send:`, `status:`) go to.
+    var isActivePanel = true
     let onActivatePanel: () -> Void
     let onClosePanel: () -> Void
     let onAddPanel: () -> Void
@@ -51,7 +52,24 @@ struct CloudConversation: View {
     @State private var scrollPositionOwner: TranscriptIdentity?
     @State private var composerCollapseOverride: Bool?
     @State private var bottomStackHeight: CGFloat = 0
+    /// The transcript's visible height, the least its content takes.
+    @State private var viewportHeight: CGFloat = 0
+    /// This transcript's own scope for Copy reading its visual replies.
+    @State private var copyScope = UUID()
+    /// Rows lie below what shows (measured; it never changes whether the transcript follows).
+    @State private var hasContentBelow = false
+    /// Raw scroll measurements, read in callbacks and never observed: a value
+    /// that changes with every scroll tick must not rebuild the transcript.
+    @State private var measured = TranscriptMeasurements()
+    /// Counts the reader's and the app's explicit scroll actions (Latest
+    /// reply, send, opening a chat, the reader's own scroll): positioning
+    /// begun before the latest one (a Library source, a page-in's held row)
+    /// gives way to it.
+    @State private var scrollGeneration = 0
     @State private var isUserScrolling = false
+    /// Counts put-back requests that have waited for the layout that queued
+    /// them to end; each runs against whatever the transcript is then.
+    @State private var endRepairs = 0
     @State private var libraryHighlightID: String?
     @State private var attachmentOpenError: String?
     @State private var choosingFolder = false
@@ -77,7 +95,7 @@ struct CloudConversation: View {
     @ViewBuilder var body: some View {
         let runsByAssistantMessageID = self.runsByAssistantMessageID
         let activitiesByRunID = self.activitiesByRunID
-        let visibleMessages = self.visibleMessages
+        let visibleMessages = self.visibleMessages(runs: runsByAssistantMessageID)
         let rows = visibleMessages.flatMap { message in
             ConversationMessageLayout.rows(messageID: message.id, role: message.role)
                 .map { ConversationMessageRow(message: message, layout: $0) }
@@ -119,7 +137,7 @@ struct CloudConversation: View {
                                 let loaderID = historyLoaderID(oldestMessageID: oldestMessageID)
                                 Color.clear
                                     .frame(height: 1)
-                                    .padding(.bottom, 32)
+                                    .padding(.bottom, ConversationMetrics.turnGap)
                                     .id(loaderID)
                                     .accessibilityIdentifier("conversation-history-loader")
                                     .onScrollVisibilityChange(threshold: 0.01) { visible in
@@ -152,14 +170,20 @@ struct CloudConversation: View {
                         }
                         Color.clear
                             .frame(height: bottomScrollClearance)
-                            .padding(.top, 32)
+                            // Which scroll view and window are this transcript's, for the reader's input.
+                            .background(ConversationScrollViewReader { measured.scrollView = $0 })
                             .id(chatEndID)
                     }
                     .coordinateSpace(.named(Self.contentSpace))
-                    .frame(maxWidth: 768)
+                    .frame(maxWidth: ConversationMetrics.column)
                     .frame(maxWidth: .infinity)
-                    .padding(.horizontal, 32)
-                    .padding(.top, 24)
+                    .padding(.horizontal, ConversationMetrics.sideInset)
+                    .padding(.top, ConversationMetrics.topInset)
+                    // Never shorter than the viewport: the transcript first
+                    // growing past the window then keeps the bottom through
+                    // the size-change anchor in the same pass, as any later
+                    // growth does, instead of a scroll after the layout.
+                    .frame(minHeight: viewportHeight, alignment: .top)
                     .scrollTargetLayout()
                 }
                 // Each chat gets its own scroll view, which opens at the bottom
@@ -171,14 +195,66 @@ struct CloudConversation: View {
                     await scrollToLibraryMessage(using: proxy)
                 }
                 .debugRequest("scroll-top") {
-                    guard let first = rows.first?.id else { return }
                     transcriptOwnsScroll = true
                     scrollState.setNearBottom(false)
-                    scrollWithoutAnimation(proxy, to: first, anchor: .top)
+                    // The very top, with the transcript's inset above the first row.
+                    scroll { $0.scrollTo(edge: .top) }
+                }
+                // `scroll-end` goes to the end as Latest reply does, and follows it again.
+                .debugRequest("scroll-end") {
+                    takeOverScrolling()
+                    transcriptOwnsScroll = false
+                    scrollState.setNearBottom(true)
+                    scrollToEnd()
+                }
+                // `work:open` and `work:fold` open or fold the work of every turn, as
+                // its header does; a running turn's fold is flipped from open.
+                .debugCommand("work:") { action in
+                    guard let session else { return }
+                    for run in session.runs {
+                        let running = run.status == .running
+                        session.transcriptState.setExpanded(
+                            ConversationTranscriptState.disclosureKey(runID: run.id, itemID: running ? "turn:running" : "turn"),
+                            running ? action != "open" : action == "open")
+                    }
+                }
+                // `send:TEXT` sends TEXT from this chat's composer.
+                .debugCommand("send:") { text in
+                    // Only the active panel's chat, and only if it is still that chat.
+                    guard isActivePanel, let target = conversation?.id else { return }
+                    draft = text
+                    Task { @MainActor in
+                        await Task.yield()
+                        guard isActivePanel, conversation?.id == target else { return }
+                        sendFromComposer()
+                    }
+                }
+                // `stop` stops this chat's running turn, as the composer's stop button does.
+                .debugRequest("stop") {
+                    guard isActivePanel, let session, session.isRunning else { return }
+                    Task { await session.stop() }
+                }
+                // `status:PATH` writes whether this chat's turn is still running.
+                .debugCommand("status:") { path in
+                    guard isActivePanel else { return }
+                    let running = session?.isRunning == true
+                    // How far the end is below what shows, and whether the transcript follows it.
+                    let text = "{\"chat\":\"\(conversation?.id ?? "")\",\"running\":\(running)," +
+                        "\"endDistance\":\(Int(measured.endDistance)),\"following\":\(followsBottom)}"
+                    try? text.write(toFile: path.trimmingCharacters(in: .whitespaces), atomically: true, encoding: .utf8)
+                }
+                // `scroll-y:POINTS` sets the offset, as a reader scrolling away would.
+                .debugCommand("scroll-y:") { value in
+                    guard let y = Double(value.trimmingCharacters(in: .whitespaces)) else { return }
+                    transcriptOwnsScroll = true
+                    scrollState.setNearBottom(false)
+                    scroll { $0.scrollTo(y: y) }
                 }
                 .environment(\.conversationTranscriptInteraction) {
                     transcriptOwnsScroll = true
-                    scrollPosition = ScrollPosition(idType: String.self)
+                    // Pin where the reader is now, so what they opened or chose
+                    // stays where it is while it changes size.
+                    scroll { $0.scrollTo(y: hold.offset) }
                     scrollState.setNearBottom(false)
                 }
                 .environment(\.conversationActivityDetails) { runID, activityID in
@@ -190,49 +266,67 @@ struct CloudConversation: View {
                 // in the same layout pass; a later scroll would show each
                 // chunk below the edge for a frame and then jump.
                 .defaultScrollAnchor(followsBottom ? .bottom : .top, for: .sizeChanges)
-                .scrollPosition(transcriptPosition, anchor: .bottom)
-                .onScrollPhaseChange { _, phase in
+                // Away from the live edge, what the reader sees stays put when
+                // something above or below it opens, folds or grows.
+                .scrollPosition(transcriptPosition, anchor: followsBottom ? .bottom : .top)
+                .onScrollPhaseChange { _, phase, context in
+                    let wasScrolling = isUserScrolling
                     isUserScrolling = phase == .interacting || phase == .tracking || phase == .decelerating
-                    if isUserScrolling {
-                        transcriptOwnsScroll = false
+                    let end = TranscriptEnd(context.geometry)
+                    if isUserScrolling, !wasScrolling {
+                        measured.readerScrollStart = end.offset
+                        // The reader's scroll outranks a pending Library jump;
+                        // a page-in they scrolled to keeps holding their row.
+                        scrollGeneration += 1
+                    } else if wasScrolling, !isUserScrolling, end.offset != measured.readerScrollStart {
+                        // Where the reader's own scroll stopped decides whether
+                        // the latest reply stays in view; a tap that moved
+                        // nothing decides nothing.
+                        readerMoved(to: end)
+                    } else if wasScrolling, !isUserScrolling {
+                        // A touch that moved nothing leaves following as it was,
+                        // and the end it may have kept from being put back.
+                        restoreEndAfterLayout()
                     }
                 }
-                .onScrollGeometryChange(for: ConversationGeometry.self) { geometry in
-                    ConversationGeometry(
-                        contentHeight: geometry.contentSize.height,
-                        isNearBottom: geometry.visibleRect.maxY >= geometry.contentSize.height - 80
-                    )
-                } action: { _, newGeometry in
-                    geometryChanged(to: newGeometry)
+                .onChange(of: endRepairs) { repairEnd() }
+                .onScrollGeometryChange(for: TranscriptEnd.self) { geometry in
+                    TranscriptEnd(geometry)
+                } action: { before, after in
+                    endChanged(from: before, to: after)
                 }
+                .onScrollGeometryChange(for: CGFloat.self) { $0.containerSize.height } action: { _, height in
+                    viewportHeight = height
+                }
+                // Back from paging history, a library jump or a reader's
+                // scroll, still following: make up for anything missed meanwhile.
                 .onScrollGeometryChange(for: CGFloat.self) { geometry in
                     // The offset as `scrollTo(y:)` takes it.
                     geometry.contentOffset.y + geometry.contentInsets.top
                 } action: { _, offset in
                     scrolled(to: offset)
                 }
+                .onAppear { ConversationReaderInput.start() }
+                .onDisappear { ConversationReaderInput.stop() }
                 .onChange(of: conversation?.id, initial: true) { _, conversationID in
                     conversationChanged(to: conversationID)
                 }
-                .overlay(alignment: .bottomTrailing) {
-                    if !scrollState.isNearBottom, conversation != nil {
-                        Button("Latest reply", systemImage: "arrow.down") {
-                            releaseHeldRow()
-                            transcriptOwnsScroll = false
-                            scrollState.setNearBottom(true)
-                            scrollToConversationBottom(using: proxy)
-                        }
-                        .buttonStyle(WovenQuietButtonStyle())
-                        .padding(.trailing, 32)
-                        .padding(.bottom, bottomScrollClearance)
-                    }
+                .onChange(of: transcriptIdentity, initial: true) { _, identity in measured.shown = identity }
+                .conversationEdges(stackHeight: bottomStackHeight,
+                                   jumpLabel: !scrollState.isNearBottom && hasContentBelow && conversation != nil
+                                       ? "Latest reply" : nil) {
+                    takeOverScrolling()
+                    transcriptOwnsScroll = false
+                    scrollState.setNearBottom(true)
+                    scrollToEnd()
                 }
             }
             .simultaneousGesture(TapGesture().onEnded(onActivatePanel))
 
             bottomStack
                 .frame(maxWidth: .infinity)
-                .padding(.horizontal, usesCompactPanelSpacing ? 12 : 32)
+                .padding(.horizontal, ConversationMetrics.sideInset)
+                .conversationPanelControls { leadingPanelControl } trailing: { trailingPanelControl }
                 .padding(.top, 8)
                 .onGeometryChange(for: CGFloat.self) { geometry in
                     geometry.size.height
@@ -242,7 +336,9 @@ struct CloudConversation: View {
                 .padding(.bottom, ConversationBottomOverlayLayout.bottomOffset)
         }
         .background(theme.palette.workspace)
+        .environment(\.conversationCopyScope, copyScope)
         .environment(\.conversationTranscriptState, session?.transcriptState)
+        .environment(\.conversationFolder, sessionFolder)
         .environment(\.conversationTaskProgress, interaction == nil ? session?.taskProgress : nil)
         .onChange(of: interaction?.id) { _, _ in session?.transcriptState.tasksExpanded = false }
         .alert("Could not open attachment", isPresented: Binding(
@@ -288,34 +384,28 @@ struct CloudConversation: View {
                         .font(.system(size: 11.5))
                         .foregroundStyle(WovenPalette.mutedForeground)
                 }
-                .frame(maxWidth: 768, alignment: .leading)
+                .frame(maxWidth: ConversationMetrics.column, alignment: .leading)
                 .accessibilityElement(children: .combine)
             }
             if let error = session?.error {
                 InlineError(text: error)
-                    .frame(maxWidth: 768)
+                    .frame(maxWidth: ConversationMetrics.column)
             }
             if let interaction, let session {
                 SessionInteractionCard(interaction: interaction) { response in
                     Task { await session.answer(interaction.id, with: response) }
                 }
                 .disabled(!session.isOwnerReachable)
+                .conversationCoverSnapshot()
                 .id(interaction.id)
             }
-            // Side buttons sit on the composer's bottom control row; the
-            // composer grows upward with its draft and Tasks badge.
-            HStack(alignment: .bottom, spacing: 8) {
-                leadingPanelControl
-                    .padding(.bottom, ConversationComposer.verticalPadding)
-                VStack(spacing: 8) {
-                    notices
-                    composer
-                }
-                trailingPanelControl
-                    .padding(.bottom, ConversationComposer.verticalPadding)
+            // The transcript's column, so the composer and the messages share
+            // edges; the panel buttons sit in the margins beside it.
+            VStack(spacing: 8) {
+                notices
+                composer
             }
-            // Animate the whole row so the outside buttons follow the
-            // composer height in the same layout transaction.
+            .frame(maxWidth: ConversationMetrics.column)
             .animation(
                 reduceMotion ? nil : .easeOut(duration: 0.15),
                 value: composerCollapseOverride ?? startsComposerCollapsed
@@ -332,19 +422,6 @@ struct CloudConversation: View {
                 help: "Remove panel",
                 action: onClosePanel
             )
-        } else if let conversation, !conversation.isArchived, conversation.runtimeKind == .defaultAgent {
-            PanelControlButton(
-                glyph: .settings,
-                accessibilityLabel: "Pi Durable settings",
-                help: "Pi Durable settings"
-            ) {
-                model.navigation.pendingDefaultAgentSettingsScope = conversation.machineID
-            }
-        } else if showsAddPanel {
-            Color.clear
-                .frame(width: PanelControlButton.size, height: PanelControlButton.size)
-                .allowsHitTesting(false)
-                .accessibilityHidden(true)
         }
     }
 
@@ -357,11 +434,6 @@ struct CloudConversation: View {
                 help: "Add panel",
                 action: onAddPanel
             )
-        } else if showsClosePanel {
-            Color.clear
-                .frame(width: PanelControlButton.size, height: PanelControlButton.size)
-                .allowsHitTesting(false)
-                .accessibilityHidden(true)
         }
     }
 
@@ -444,15 +516,7 @@ struct CloudConversation: View {
                 return onDropFiles(urls)
             },
             onCommandNavigation: onCommandNavigation,
-            onSend: {
-                guard conversation?.isArchived != true else { return }
-                releaseHeldRow()
-                transcriptOwnsScroll = false
-                isUserScrolling = false
-                scrollState.setNearBottom(true)
-                scroll { $0.scrollTo(id: chatEndID, anchor: .bottom) }
-                onSend()
-            },
+            onSend: { sendFromComposer() },
             onStop: session.flatMap { session in
                 guard !isReadOnly, session.isRunning else { return nil }
                 return { Task { await session.stop() } }
@@ -526,13 +590,56 @@ struct CloudConversation: View {
         let identity = transcriptIdentity
         return Binding(
             get: { scrollPositionOwner == identity ? scrollPosition : ScrollPosition(idType: String.self) },
-            set: { scrollPosition = $0; scrollPositionOwner = identity })
+            set: { position in
+                // A scroll view that no longer shows the current transcript writes nothing back.
+                guard identity == measured.shown else { return }
+                if scrollPosition != position { scrollPosition = position }
+                if scrollPositionOwner != identity { scrollPositionOwner = identity }
+            })
     }
 
     private func scroll(_ change: (inout ScrollPosition) -> Void) {
+        // The app scrolls only the transcript it shows now.
+        measured.shown = transcriptIdentity
         var position = transcriptPosition.wrappedValue
         change(&position)
         transcriptPosition.wrappedValue = position
+    }
+
+    /// The one way the app puts the view at the end (Latest reply, send,
+    /// following): the bottom edge, asked again whenever the end has moved
+    /// while following. One request per action: a second scroll target set
+    /// inside the update the first one started (as a change of follow intent
+    /// used to) left SwiftUI resolving between them forever, and the app
+    /// hung. No end row or proxy scroll beside it, and no measured offset,
+    /// which chases a lazy stack's estimate of its own height.
+    private func scrollToEnd() {
+        scroll { $0.scrollTo(edge: .bottom) }
+    }
+
+    /// An explicit jump takes over: a Library source jump or a page-in still
+    /// positioning the view gives way, and the Library target it replaces is
+    /// dropped.
+    private func takeOverScrolling() {
+        scrollGeneration += 1
+        historyGeneration += 1
+        isPrependingHistory = false
+        releaseHeldRow()
+        if model.navigation.libraryMessageTarget?.conversationID == conversation?.id {
+            model.navigation.libraryMessageTarget = nil
+            libraryHighlightID = nil
+        }
+    }
+
+    /// What the composer's Send does, and the debug `send:` with it.
+    private func sendFromComposer() {
+        guard conversation?.isArchived != true else { return }
+        takeOverScrolling()
+        transcriptOwnsScroll = false
+        isUserScrolling = false
+        scrollState.setNearBottom(true)
+        scrollToEnd()
+        onSend()
     }
 
     private var chatEndID: String {
@@ -556,9 +663,8 @@ struct CloudConversation: View {
     }
 
     /// An empty reply to a run that has not started yet is not shown.
-    private var visibleMessages: [WorkspaceMessageRecord] {
-        let runs = runsByAssistantMessageID
-        return messages.filter { message in
+    private func visibleMessages(runs: [String: WorkspaceRunRecord]) -> [WorkspaceMessageRecord] {
+        messages.filter { message in
             message.role != .assistant || !message.content.isEmpty || runs[message.id]?.status != .queued
         }
     }
@@ -588,11 +694,13 @@ struct CloudConversation: View {
     private func conversationChanged(to conversationID: String?) {
         session?.transcriptState.tasksExpanded = false
         isUserScrolling = false
-        let targetsLibraryMessage = model.navigation.libraryMessageTarget?.conversationID == conversationID
+        let targetsLibraryMessage = conversationID != nil
+            && model.navigation.libraryMessageTarget?.conversationID == conversationID
         transcriptOwnsScroll = targetsLibraryMessage
         scrollState.conversationChanged(to: conversationID)
         if transcriptOwnsScroll { scrollState.setNearBottom(false) }
         scrollPosition = ScrollPosition(idType: String.self)
+        scrollGeneration += 1
         // A page-in begun in the last chat ends there.
         historyGeneration += 1
         isPrependingHistory = false
@@ -600,17 +708,102 @@ struct CloudConversation: View {
         releaseHeldRow()
     }
 
-    /// Growth and shrinking at the live edge keep the bottom through the
-    /// size-change anchor, in the same layout pass. A scroll a turn later
-    /// would move the view against a document AppKit has not resized yet.
-    private func geometryChanged(to newGeometry: ConversationGeometry) {
-        scrollState.setNearBottom(newGeometry.isNearBottom && !transcriptOwnsScroll)
+    /// The folder the session works in, when it has one.
+    private var sessionFolder: String? {
+        model.workspace.folder(id: conversation?.folderID)?.rootPath
+    }
+
+    private static let liveEdgeTolerance = ConversationEnd.liveEdge
+    /// How long after a viewport change the scroll view's own moves belong to
+    /// it (its follow-up pass came about 8 to 13 ms after).
+    private static let viewportSettle: CFTimeInterval = 0.1
+
+    /// Geometry is only measured here. Whether the transcript follows the end
+    /// is the reader's: their own scroll, Latest reply, or opening or
+    /// selecting something decide it, never a layout pass. Growth and
+    /// shrinking at the live edge keep the bottom through the size-change
+    /// anchor in the same pass; when a resize leaves the end out of view
+    /// anyway, it is put back. Keyboard, wheel and accessibility
+    /// scrolls report no scroll phase, so the view moving right after the
+    /// reader's own input is the reader too when it leaves the end or arrives
+    /// at it; with no such input it is the layout (a resize can move the view
+    /// again a pass later), and only puts the end back.
+    private func endChanged(from before: TranscriptEnd, to after: TranscriptEnd) {
+        // Only what changes something visible is published.
+        let obscured = ConversationEnd.isObscured(distance: after.distance)
+        if obscured != hasContentBelow { hasContentBelow = obscured }
+        measured.endDistance = after.distance
+        let resized = after.contentHeight != before.contentHeight || after.viewportHeight != before.viewportHeight
+        if resized { measured.resizes += 1 }
+        // The view moving with no scroll phase is the reader only when the
+        // reader just used a wheel, a navigation key or the pointer on this
+        // transcript, or VoiceOver is on: the scroll view also moves on its
+        // own (after a window resize it can put back an offset it had before,
+        // in a pass with no size change), and a layout never changes
+        // following. With that input: when nothing resized, any move away
+        // from the end or onto it; when something resized in the same
+        // update, one that left the end further away (keeping the bottom
+        // never does), or one that reached the end.
+        // The scroll view's own move in the passes right after a viewport
+        // change is the layout's, even with VoiceOver on.
+        let now = CACurrentMediaTime()
+        if after.viewportHeight != before.viewportHeight { measured.viewportChangedAt = now }
+        let readerInput = ConversationReaderInput.isRecent(for: measured.scrollView, isActivePanel: isActivePanel,
+            countsVoiceOver: now - measured.viewportChangedAt > Self.viewportSettle)
+        let movedAway = after.distance > max(before.distance, Self.liveEdgeTolerance)
+        let arrived = after.distance <= Self.liveEdgeTolerance && before.distance > Self.liveEdgeTolerance
+        let moved = after.offset != before.offset
+        if !isUserScrolling, !isPrependingHistory, moved, readerInput,
+           resized ? movedAway || arrived : after.distance > before.distance || after.distance <= Self.liveEdgeTolerance {
+            readerMoved(to: after)
+        }
+        // The scroll view moved on its own and left the end out of view while following: put it back.
+        if !resized, moved, !readerInput, followsBottom, after.distance > 0 {
+            measured.restoredResize = nil
+            restoreEndAfterLayout()
+        }
         // Back at the live edge, the bottom holds instead.
-        if newGeometry.isNearBottom, !isPrependingHistory, heldRowID != nil { releaseHeldRow() }
+        if after.distance <= Self.liveEdgeTolerance, !isPrependingHistory, heldRowID != nil { releaseHeldRow() }
+        if followsBottom, resized, after.distance > 0 { restoreEndAfterLayout() }
+    }
+
+    /// Puts the end back after this layout, not inside it. The request only
+    /// waits for the layout to end; what it does is decided then, from the
+    /// transcript as it is (see `repairEnd`), never from the one that asked.
+    private func restoreEndAfterLayout() {
+        guard !measured.restoreQueued else { return }
+        measured.restoreQueued = true
+        Task { @MainActor in
+            measured.restoreQueued = false
+            endRepairs &+= 1
+        }
+    }
+
+    /// Puts the end back if the transcript showing now follows it, has it out
+    /// of view and is not being scrolled by the reader: at most once for each
+    /// change of content or viewport size, so it cannot repeat itself. A
+    /// request that finds the reader scrolling does nothing; their scroll
+    /// ending asks again.
+    private func repairEnd() {
+        guard followsBottom, measured.endDistance > 0, measured.restoredResize != measured.resizes else { return }
+        measured.restoredResize = measured.resizes
+        scrollToEnd()
+    }
+
+    /// The reader moved the view: at the live edge it follows again, away from it it stays where they put it.
+    private func readerMoved(to end: TranscriptEnd) {
+        transcriptOwnsScroll = false
+        let atLiveEdge = end.distance <= Self.liveEdgeTolerance
+        // A move with no scroll phase leaves the last position the app set (the
+        // end, while following) in place, and that would keep pulling the view
+        // down: hold it where the reader put it instead.
+        if !atLiveEdge, scrollState.isNearBottom { scroll { $0.scrollTo(y: end.offset) } }
+        scrollState.setNearBottom(atLiveEdge)
     }
 
     private func scrolled(to offset: CGFloat) {
         hold.offset = offset
+        measured.offset = offset
         // The reader moved the held row; it holds where they put it.
         if isUserScrolling, heldRowID != nil, let top = hold.top { hold.screenTop = top - offset }
     }
@@ -633,7 +826,7 @@ struct CloudConversation: View {
     /// Holds the topmost row whose identity survives older rows arriving: a
     /// reply's first part can join a turn that starts above it.
     private func holdTopRow() {
-        let shown = visibleMessages
+        let shown = visibleMessages(runs: runsByAssistantMessageID)
         let message = shown.first { $0.role != .assistant } ?? shown.first
         hold.top = nil
         hold.screenTop = nil
@@ -650,6 +843,7 @@ struct CloudConversation: View {
     private func scrollToLibraryMessage(using proxy: ScrollViewProxy) async {
         guard let item = model.navigation.libraryMessageTarget, item.conversationID == conversation?.id,
               let session else { return }
+        let generation = scrollGeneration
         transcriptOwnsScroll = true
         scrollState.setNearBottom(false)
         await session.refresh()
@@ -663,8 +857,9 @@ struct CloudConversation: View {
         guard !Task.isCancelled, conversation?.id == item.conversationID else { return }
         await Task.yield()
         try? await Task.sleep(for: .milliseconds(100))
+        // Anything the reader or the app did meanwhile wins over this jump.
         guard !Task.isCancelled, model.navigation.libraryMessageTarget?.id == item.id,
-              conversation?.id == item.conversationID else { return }
+              conversation?.id == item.conversationID, generation == scrollGeneration else { return }
         // A run's reply shows several of its items.
         guard let shownID = session.messages.first(where: { $0.shows(item.messageID) })?.id else {
             session.setError("This source message is no longer available.")
@@ -675,6 +870,11 @@ struct CloudConversation: View {
         scrollState.sourceMessagePositioned(in: item.conversationID)
         scrollPosition = ScrollPosition(idType: String.self)
         scrollWithoutAnimation(proxy, to: shownID, anchor: .top)
+        // Clear of the floating buttons over the top edge, where it can be
+        // seen; in a later update, so it is never a second target beside the first.
+        try? await Task.sleep(for: .milliseconds(50))
+        guard !Task.isCancelled, generation == scrollGeneration else { return }
+        scroll { $0.scrollTo(y: max(0, measured.offset - ConversationMetrics.topInset)) }
         try? await Task.sleep(for: .seconds(2))
         if libraryHighlightID == shownID { libraryHighlightID = nil }
         if !Task.isCancelled, model.navigation.libraryMessageTarget?.id == item.id {
@@ -714,10 +914,6 @@ struct CloudConversation: View {
         }
     }
 
-    private func scrollToConversationBottom(using proxy: ScrollViewProxy) {
-        scroll { $0.scrollTo(id: chatEndID, anchor: .bottom) }
-        scrollWithoutAnimation(proxy, to: chatEndID, anchor: .bottom)
-    }
 }
 
 func nonemptyString(_ value: String?) -> String? {
@@ -727,6 +923,20 @@ func nonemptyString(_ value: String?) -> String? {
 }
 
 struct MessageRow: View {
+    /// What Copy puts before a reply's text: its visual replies' text, if any.
+    static func copyLead(_ keys: [String]) -> (@MainActor @Sendable () async -> String?)? {
+        guard !keys.isEmpty else { return nil }
+        return { @MainActor @Sendable in await ConversationVisualReplyText.text(of: keys) }
+    }
+
+    /// Whether reply text opens with a box: fenced code or a table.
+    static func startsWithBox(_ text: String) -> Bool {
+        guard let first = text.split(whereSeparator: \.isNewline).first(where: {
+            !$0.trimmingCharacters(in: .whitespaces).isEmpty
+        })?.trimmingCharacters(in: .whitespaces) else { return false }
+        return first.hasPrefix("```") || first.hasPrefix("~~~") || first.hasPrefix("|")
+    }
+
     let message: WorkspaceMessageRecord
     let run: WorkspaceRunRecord?
     let activities: [WorkspaceRunActivityRecord]
@@ -734,14 +944,11 @@ struct MessageRow: View {
     let resolveFile: (String) async throws -> URL
     let layout: ConversationMessageLayout.Row
     var onNewSession: (() -> Void)? = nil
+    @Environment(\.conversationCopyScope) private var copyScope
 
     private var isStreaming: Bool {
         AssistantStreamingText.isStreaming(messageStatus: message.status, runStatus: run?.status)
     }
-    private var assistantBody: String {
-        isStreaming ? AssistantStreamingText.readyPrefix(of: transcript.body) : transcript.body
-    }
-
     /// The reply's text, apart from the commentary the work log shows.
     private var transcript: (body: String, commentaryIDs: Set<String>) {
         let work = activities.map(\.activity)
@@ -752,90 +959,93 @@ struct MessageRow: View {
 
     var body: some View {
         if message.role == .system {
-            HStack(spacing: 7) {
+            HStack(spacing: ConversationMetrics.labelGap) {
                 Image(systemName: "info.circle")
                 Text(message.content)
                     .lineLimit(1)
                 if let onNewSession {
-                    Button("New Chat", action: onNewSession)
-                        .buttonStyle(WovenQuietButtonStyle())
+                    ConversationTextButton("New Chat", action: onNewSession)
                 }
             }
             .font(.system(size: 12))
             .foregroundStyle(WovenPalette.mutedForeground)
         } else if layout.content == .fileChanges {
             HStack {
-                ConversationChangedFilesCard(records: activities, topSpacing: {
-                    // Under the reply, or under the turn's header, which every run shows.
-                    showsAssistantBody || run != nil ? 18 : 0
-                })
-                .frame(maxWidth: .infinity, alignment: .leading)
+                ConversationChangedFilesCard(records: activities)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 Spacer(minLength: 0)
             }
             .fixedSize(horizontal: false, vertical: true)
-        } else {
-            let isUser = message.role == .user
-            HStack {
-                if isUser { Spacer(minLength: 72) }
-                VStack(alignment: isUser ? .trailing : .leading, spacing: 18) {
-                    if !isUser, let run {
-                        ConversationWorkTranscript(
-                            run: run,
-                            records: activities,
-                            commentaryIDs: transcript.commentaryIDs,
-                            hasFollowingResponse: hasResponseText,
-                            timeline: projectedTimeline
-                        )
-                    }
-                    if isUser {
-                        WorkspaceIncomingAgentHeader(message: message)
-                        ConversationUserMessage(
-                            content: message.senderKind == .goal ? "Continuing toward the goal." : message.content,
-                            attachments: message.attachments,
-                            references: message.references,
-                            onOpenAttachment: onOpenAttachment
-                        )
-                    } else if showsAssistantBody {
-                        VStack(alignment: .leading, spacing: 0) {
-                            ConversationResponse(
-                                content: assistantBody,
-                                document: nil,
-                                isStreaming: isStreaming
-                            )
-                            .padding(.horizontal, 4)
-                            .padding(.vertical, 2)
-                            // The running turn's dots, under the text it is writing.
-                            if run?.status == .running && hasResponseText {
-                                ConversationRunningDots().padding(.top, 4)
-                            }
-                        }
-                        if !isStreaming {
-                            ConversationFilePreviews(content: assistantBody, messageID: message.libraryItemID, resolveFile: resolveFile)
-                        }
-                    }
+        } else if message.role == .user {
+            ConversationMessageRowLayout {
+                VStack(alignment: .trailing, spacing: ConversationMetrics.labelGap) {
+                    WorkspaceIncomingAgentHeader(message: message)
+                    ConversationUserMessage(
+                        content: message.senderKind == .goal ? "Continuing toward the goal." : message.content,
+                        attachments: message.attachments,
+                        references: message.references,
+                        onOpenAttachment: onOpenAttachment
+                    )
                 }
-                .frame(maxWidth: isUser ? nil : .infinity, alignment: isUser ? .trailing : .leading)
-                if !isUser { Spacer(minLength: 0) }
             }
             .fixedSize(horizontal: false, vertical: true)
+        } else {
+            assistantTurn(transcript)
         }
     }
 
-    /// Text the work transcript leaves to the response below it.
-    private var hasResponseText: Bool {
-        !assistantBody.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-    }
-
-    private var showsAssistantBody: Bool {
-        ConversationMessageLayout.showsAssistantBody(
+    /// The partition is worked out once per update and shared by every part.
+    @ViewBuilder
+    private func assistantTurn(_ transcript: (body: String, commentaryIDs: Set<String>)) -> some View {
+        let reply = isStreaming ? AssistantStreamingText.readyPrefix(of: transcript.body) : transcript.body
+        // Text the work transcript leaves to the response below it.
+        let hasResponseText = !reply.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let showsReply = ConversationMessageLayout.showsAssistantBody(
             content: message.content,
-            displayedBody: assistantBody,
+            displayedBody: reply,
             failedRunError: run?.status == .failed ? run?.error : nil
         )
-    }
-
-    private var projectedTimeline: ConversationWorkTimeline {
-        ConversationWorkTimeline(records: activities, commentaryIDs: transcript.commentaryIDs)
+        // This answer's visual replies, in the order they show, as Copy reads them.
+        let visualKeys: [String] = activities.compactMap(\.activity.htmlRender)
+            .map { ConversationVisualReplyText.key(scope: copyScope, item: $0.id) }
+        HStack {
+            // Each part owns the gap above it: the work log ends with the
+            // gap to the reply, and the previews and card start with theirs.
+            VStack(alignment: .leading, spacing: 0) {
+                if let run {
+                    ConversationWorkTranscript(
+                        run: run,
+                        records: activities,
+                        commentaryIDs: transcript.commentaryIDs,
+                        hasFollowingResponse: hasResponseText && showsReply,
+                        replyStartsWithBox: Self.startsWithBox(reply),
+                        timeline: ConversationWorkTimeline(records: activities, commentaryIDs: transcript.commentaryIDs)
+                    )
+                }
+                if showsReply {
+                    ConversationResponse(
+                        content: reply,
+                        isStreaming: isStreaming,
+                        isCut: !isStreaming && (run?.status == .cancelled || run?.status == .failed),
+                        // The running turn's dots, under the text it is writing.
+                        showsRunningDots: run?.status == .running && hasResponseText,
+                        fileRow: ConversationFileRow(messageID: message.libraryItemID, resolveFile: resolveFile)
+                    )
+                    // Copy takes the whole answer: the visual replies' text above the reply's.
+                    .environment(\.conversationCopyLead, Self.copyLead(visualKeys))
+                } else if !hasResponseText, let run, run.status != .running, !visualKeys.isEmpty {
+                    // An answer that is only a visual reply can be copied too:
+                    // the page's readable text, from the same action row.
+                    ConversationVisualReplyCopyButton(keys: visualKeys)
+                        .frame(minHeight: ConversationMetrics.actionRowHeight)
+                        // Its hover box reaches past the row; the gap keeps it clear of the page.
+                        .padding(.top, ConversationMetrics.entryGap)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            Spacer(minLength: 0)
+        }
+        .fixedSize(horizontal: false, vertical: true)
     }
 }
 
@@ -848,8 +1058,8 @@ struct ConversationUserMessage: View {
         ConversationUserBubble(content: content, hasAttachments: !attachments.isEmpty || !references.isEmpty) {
             if !attachments.isEmpty || !references.isEmpty {
                 LazyVGrid(
-                    columns: [GridItem(.adaptive(minimum: 150), spacing: 6)],
-                    spacing: 6
+                    columns: [GridItem(.adaptive(minimum: 150), spacing: ConversationMetrics.labelGap)],
+                    spacing: ConversationMetrics.labelGap
                 ) {
                     ForEach(attachments) { attachment in
                         Button { onOpenAttachment?(attachment) } label: {
@@ -918,23 +1128,27 @@ private struct MacAccessNotice: View {
     let openSettings: (() -> Void)?
 
     var body: some View {
-        if let openSettings {
-            Button(action: openSettings) { label(showsArrow: true) }
-                .buttonStyle(SettingsQuietButtonStyle(horizontalPadding: 12, minimumHeight: 32))
-                .background(theme.palette.themeWhisper,
-                    in: RoundedRectangle(cornerRadius: WovenMetrics.controlRadius, style: .continuous))
-                .background(WovenPalette.background,
-                    in: RoundedRectangle(cornerRadius: WovenMetrics.controlRadius, style: .continuous))
-                .help("Open Settings → Permissions & Access")
-        } else {
-            label(showsArrow: false)
-                .padding(.horizontal, 12)
-                .frame(minHeight: 32)
-                .background(theme.palette.themeWhisper,
-                    in: RoundedRectangle(cornerRadius: WovenMetrics.controlRadius, style: .continuous))
-                .background(WovenPalette.background,
-                    in: RoundedRectangle(cornerRadius: WovenMetrics.controlRadius, style: .continuous))
+        // Opaque over the chat, so a debug still draws it over web pictures too.
+        Group {
+            if let openSettings {
+                Button(action: openSettings) { label(showsArrow: true) }
+                    .buttonStyle(SettingsQuietButtonStyle(horizontalPadding: 12, minimumHeight: 32))
+                    .background(theme.palette.themeWhisper,
+                        in: RoundedRectangle(cornerRadius: WovenMetrics.controlRadius, style: .continuous))
+                    .background(WovenPalette.background,
+                        in: RoundedRectangle(cornerRadius: WovenMetrics.controlRadius, style: .continuous))
+                    .help("Open Settings → Permissions & Access")
+            } else {
+                label(showsArrow: false)
+                    .padding(.horizontal, 12)
+                    .frame(minHeight: 32)
+                    .background(theme.palette.themeWhisper,
+                        in: RoundedRectangle(cornerRadius: WovenMetrics.controlRadius, style: .continuous))
+                    .background(WovenPalette.background,
+                        in: RoundedRectangle(cornerRadius: WovenMetrics.controlRadius, style: .continuous))
+            }
         }
+        .conversationCoverSnapshot(radius: WovenMetrics.controlRadius)
     }
 
     private func label(showsArrow: Bool) -> some View {
@@ -957,6 +1171,28 @@ private struct MacAccessNotice: View {
     }
 }
 
+/// Scroll measurements read in callbacks, and so not observed.
+private final class TranscriptMeasurements {
+    /// How far the end is below what shows.
+    var endDistance: CGFloat = 0
+    /// The offset, as `scrollTo(y:)` takes it.
+    var offset: CGFloat = 0
+    /// Where the reader's own scroll began.
+    var readerScrollStart: CGFloat = 0
+    /// How many times the content or viewport has changed size, the change
+    /// the end was last put back for, and whether a put-back is queued.
+    var resizes = 0
+    /// When the viewport last changed size.
+    var viewportChangedAt: CFTimeInterval = 0
+    var restoredResize: Int?
+    var restoreQueued = false
+    /// The transcript the scroll view on screen shows; a position written
+    /// back for any other is ignored.
+    var shown: TranscriptIdentity?
+    /// The scroll view that shows this transcript.
+    weak var scrollView: NSScrollView?
+}
+
 /// Where the held row is, read in layout callbacks and so not observed.
 private final class HeldRowPosition {
     /// The scroll offset, as `scrollTo(y:)` takes it.
@@ -969,7 +1205,137 @@ private final class HeldRowPosition {
 
 /// A transcript's scroll view: one per chat, made again when its first view
 /// arrives, so each opens at the bottom in its first layout.
+/// The end of a transcript as its scroll view measures it: how far the end
+/// is below what shows, where the view is, and the sizes that move them.
+private struct TranscriptEnd: Equatable {
+    let distance: CGFloat
+    let offset: CGFloat
+    let contentHeight: CGFloat
+    let viewportHeight: CGFloat
+
+    init(_ geometry: ScrollGeometry) {
+        distance = max(0, geometry.contentSize.height - geometry.visibleRect.maxY).rounded()
+        // As `scrollTo(y:)` takes it.
+        offset = (geometry.contentOffset.y + geometry.contentInsets.top).rounded()
+        contentHeight = geometry.contentSize.height.rounded()
+        viewportHeight = geometry.containerSize.height.rounded()
+    }
+}
+
 private struct TranscriptIdentity: Hashable {
     let conversationID: String?
     let hasLoaded: Bool
+}
+
+/// Copy for an answer that is only a visual reply: the page's readable text,
+/// with the reply's own quiet Copy look.
+private struct ConversationVisualReplyCopyButton: View {
+    let keys: [String]
+    @State private var copied = false
+
+    var body: some View {
+        Button(action: copy) {
+            Image(systemName: copied ? "checkmark" : "doc.on.doc")
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(WovenPalette.foreground.opacity(0.72))
+                // The hover box of the other icon buttons (the panel buttons).
+                .frame(width: PanelControlButton.size, height: PanelControlButton.size)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(WovenIconButtonStyle())
+        // It takes the action row's height in the layout, its hover box
+        // reaching past it, and its glyph lines up with the text edge.
+        .padding(.vertical, -(PanelControlButton.size - ConversationMetrics.actionRowHeight) / 2)
+        .padding(.leading, -(PanelControlButton.size - 13) / 2)
+        .help("Copy complete response")
+        .accessibilityLabel(copied ? "Response copied" : "Copy response")
+        // `copy-visual` presses it (debug builds only).
+        .debugRequest("copy-visual", copy)
+    }
+
+    private func copy() {
+        let press = ConversationVisualReplyText.press()
+        Task { @MainActor in
+            guard let text = await ConversationVisualReplyText.text(of: keys),
+                  ConversationVisualReplyText.claim(press) else { return }
+            NSPasteboard.general.clearContents()
+            copied = NSPasteboard.general.setString(text, forType: .string)
+        }
+    }
+}
+
+/// When the reader last scrolled by wheel or key, and where: a transcript move
+/// in the same moment is theirs, even when the content resized in the same
+/// update. A wheel counts for the transcript under the pointer, a navigation
+/// key for the active panel of the key window.
+@MainActor enum ConversationReaderInput {
+    private static var lastWheel = Date.distantPast
+    private static var wheelScrollViews: [ObjectIdentifier] = []
+    private static var lastKey = Date.distantPast
+    private static weak var keyWindow: NSWindow?
+    private static var monitor: Any?
+    private static var users = 0
+
+    /// A wheel or the pointer over this transcript, or a navigation key in its
+    /// window while it is the active panel, within the last half second; or
+    /// VoiceOver, whose scrolls come with no event the app sees.
+    static func isRecent(for scrollView: NSScrollView?, isActivePanel: Bool, countsVoiceOver: Bool = true) -> Bool {
+        guard let scrollView else { return false }
+        if countsVoiceOver, NSWorkspace.shared.isVoiceOverEnabled { return true }
+        let now = Date()
+        if now.timeIntervalSince(lastWheel) < 0.5, wheelScrollViews.contains(ObjectIdentifier(scrollView)) { return true }
+        return isActivePanel && now.timeIntervalSince(lastKey) < 0.5 && keyWindow != nil && keyWindow === scrollView.window
+    }
+
+    /// A move of these scroll views (and those around them) as a wheel makes.
+    static func noteWheel(over view: NSView?) {
+        var scrollViews: [ObjectIdentifier] = []
+        var current = view
+        while let next = current {
+            if let scroll = next as? NSScrollView { scrollViews.append(ObjectIdentifier(scroll)) }
+            current = next.superview
+        }
+        wheelScrollViews = scrollViews
+        lastWheel = Date()
+    }
+
+    /// Watches the app's own wheel and navigation-key events while any
+    /// transcript is shown. A key counts only outside text editing: a space
+    /// typed in the composer is not the reader scrolling; one with a reply's
+    /// read-only text focused is.
+    static func start() {
+        users += 1
+        guard monitor == nil else { return }
+        let keys: Set<UInt16> = [115, 116, 119, 121, 125, 126, 49]   // home, page up, end, page down, down, up, space
+        monitor = NSEvent.addLocalMonitorForEvents(matching: [.scrollWheel, .keyDown, .leftMouseDown, .leftMouseDragged]) { event in
+            // A drag on the scroller, or one selecting text past the edge, scrolls
+            // too; one resizing the window does not.
+            if event.type != .keyDown, let content = event.window?.contentView, event.window?.inLiveResize != true {
+                // `hitTest` takes a point in the receiver's superview's coordinates.
+                let point = content.superview?.convert(event.locationInWindow, from: nil) ?? event.locationInWindow
+                noteWheel(over: content.hitTest(point))
+            } else if event.type == .keyDown, keys.contains(event.keyCode), let window = NSApp.keyWindow,
+                      (window.firstResponder as? NSText)?.isEditable != true {
+                keyWindow = window
+                lastKey = Date()
+            }
+            return event
+        }
+    }
+
+    static func stop() {
+        users = max(0, users - 1)
+        guard users == 0, let monitor else { return }
+        NSEvent.removeMonitor(monitor)
+        self.monitor = nil
+    }
+}
+
+/// Hands back the scroll view a transcript's content sits in.
+private struct ConversationScrollViewReader: NSViewRepresentable {
+    let found: (NSScrollView?) -> Void
+    func makeNSView(context: Context) -> NSView { NSView() }
+    func updateNSView(_ view: NSView, context: Context) {
+        DispatchQueue.main.async { found(view.enclosingScrollView) }
+    }
 }

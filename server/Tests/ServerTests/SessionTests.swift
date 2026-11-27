@@ -115,12 +115,52 @@ func streamedSessionIsSavedOnceAndALateSubscriberSeesAConsistentView() async thr
   }
 
   let saved = try await late.call(SessionItems(sessionID: session.id))
-  #expect(saved.count == 3)
-  #expect(Set(saved.map(\.id)).count == 3)
+  #expect(saved.count == 4)
+  #expect(Set(saved.map(\.id)).count == 4)
+  // The turn's end is saved last, so the view that joined mid-turn, the one
+  // that watched it and the saved chat all time it the same.
+  #expect(saved.last?.content == .notice(Notice(kind: .turnEnded, text: "")))
+  #expect(saved.dropLast().allSatisfy { $0.createdAt <= saved.last!.createdAt })
   #expect(assistantTexts(saved) == ["Turn 1: hello"])
   #expect(lateView.items == saved)
   #expect(earlyView.items == saved)
   #expect(lateView.inProgress.isEmpty && earlyView.inProgress.isEmpty)
+}
+
+@Test(.timeLimit(.minutes(1)))
+func aStoppedTurnIsSavedAsStopped() async throws {
+  let machine = try await TestServer.start(runtime: StandInRuntime(gate: StandInRuntime.Gate()))
+  defer { machine.server.stopLater() }
+  let client = try await machine.connect()
+  let session = try await client.call(CreateSession(runtime: StandInRuntime.kind, title: "Chat"))
+  let subscription = try await client.subscribe(SubscribeSession(sessionID: session.id))
+  var events = subscription.events.makeAsyncIterator()
+  _ = try await client.call(SendTurn(sessionID: session.id, text: "held"))
+  while let event = try await events.next() { if case .text = event { break } }
+  _ = try await client.call(InterruptTurn(sessionID: session.id))
+  while let event = try await events.next() { if event == .runState(.idle) { break } }
+
+  let items = try await client.call(SessionItems(sessionID: session.id))
+  #expect(items.last?.content == .notice(Notice(kind: .turnEnded, text: "stopped")))
+}
+
+@Test(.timeLimit(.minutes(1)))
+func aTurnStillRunningAtARestartIsSaidToBeCutShortAfterAnEndedOne() async throws {
+  let store = StandInRuntime.NativeStore()
+  let first = try await TestServer.start(runtime: StandInRuntime(store: store))
+  let client = try await first.connect()
+  let session = try await client.call(CreateSession(runtime: StandInRuntime.kind, title: "Chat"))
+  try await turn(client, session.id, "one")
+  #expect(try await first.server.library.sessionsStoppedMidTurn().isEmpty)
+  // A turn the runtime started by itself was running, nothing of it saved yet, when the server stopped.
+  try await first.server.library.setTurnRunning(session.id, true)
+  await first.server.stop()
+
+  let second = try await TestServer.start(folder: first.folder, runtime: StandInRuntime(store: store))
+  defer { second.server.stopLater() }
+  let items = try await (try await second.connect()).call(SessionItems(sessionID: session.id))
+  guard case .notice(let notice)? = items.last?.content else { Issue.record("no notice"); return }
+  #expect(notice.kind == .interrupted)
 }
 
 @Test(.timeLimit(.minutes(1)))
@@ -147,7 +187,7 @@ func aMessageSentDuringATurnSteersItAndIsSavedOnceInOrder() async throws {
 
   let items = try await client.call(SessionItems(sessionID: session.id))
   #expect(runStates == [.idle])
-  #expect(items.count == 5 && Set(items.map(\.id)).count == 5)
+  #expect(items.count == 6 && Set(items.map(\.id)).count == 6)
   #expect(Array(items.prefix(4).map(\.content)) == [
     .userMessage(text: "one"), .assistantMessage(text: "Turn 1: "), .userMessage(text: "two"), .assistantMessage(text: "one + two"),
   ])
@@ -173,6 +213,37 @@ func aSteerTheRuntimeAnswersAfterAWovenToolCallLetsThatCallThrough() async throw
   let reply = items.firstIndex { if case .visualReply = $0 { true } else { false } }
   let steered = items.indices.filter { items[$0] == .userMessage(text: "two") }
   #expect(steered.count == 1 && reply != nil && reply! < steered[0])
+}
+
+@Test(.timeLimit(.minutes(1)))
+func aCallIsSavedWithWhereItStartedEvenWhenWhatItMadeIsSavedFirst() async throws {
+  let machine = try await TestServer.start(runtime: StandInRuntime())
+  defer { machine.server.stopLater() }
+  let client = try await machine.connect()
+  let session = try await client.call(CreateSession(runtime: StandInRuntime.kind, title: "Chat"))
+  let arguments = String(decoding: try Wire.encoder.encode(JSONValue.object(["html": .string("<title>Chart</title><p>bars</p>")])),
+                         as: UTF8.self)
+  try await turn(client, session.id, "code woven render_html \(arguments)")
+
+  let items = try await client.call(SessionItems(sessionID: session.id))
+  let reply = items.first { if case .visualReply = $0.content { true } else { false } }
+  let script = items.first { if case .toolCall(let call) = $0.content { call.kind == .code } else { false } }
+  guard let reply, let script, case .toolCall(let call) = script.content else { Issue.record("no reply or script"); return }
+  // Saved when it finished, after the reply it made, and counted as started
+  // after the person's message, before that reply.
+  #expect(reply.sequence < script.sequence)
+  #expect(call.start?.after == items.first?.sequence)
+  #expect((call.start?.after ?? .max) < reply.sequence)
+}
+
+@Test func anUpdateKeepsWhereACallStartedAndAThoughtsTitle() {
+  let start = ToolCallStart(after: 3, order: 2)
+  let named = ToolCall(name: "thinking", input: "", title: "Planning the fix", kind: .thinking, start: start)
+  let generic = ToolCall(name: "thinking", input: "", output: "more", title: "Thinking", kind: .thinking)
+  let update = SessionHost.updated(generic, from: named)
+  #expect(update.start == start && update.title == "Planning the fix" && update.output == "more")
+  let renamed = ToolCall(name: "thinking", input: "", title: "Weighing options", kind: .thinking)
+  #expect(SessionHost.updated(renamed, from: named).title == "Weighing options")
 }
 
 @Test(.timeLimit(.minutes(1)))
@@ -258,7 +329,7 @@ func restartResumesTheSameNativeSession() async throws {
   try await turn(again, session.id, "two")
 
   let items = try await again.call(SessionItems(sessionID: session.id))
-  #expect(items.map(\.sequence) == Array(1...6))
+  #expect(items.map(\.sequence) == Array(1...8))
   #expect(assistantTexts(items) == ["Turn 1: one", "Turn 2: two"])
   #expect(store.started == 1)
   #expect(store.resumed == 1)
@@ -285,7 +356,7 @@ func lostNativeSessionGivesANoticeAndNeverAFreshSession() async throws {
   }
 
   let items = try await again.call(SessionItems(sessionID: session.id))
-  #expect(items.count == 4)
+  #expect(items.count == 5)
   guard case .notice(let notice) = items.last?.content else {
     Issue.record("The last item is not a notice")
     return

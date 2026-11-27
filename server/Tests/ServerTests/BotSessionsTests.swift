@@ -112,6 +112,10 @@ func aBotStartsSteersAndFollowsASessionOnAnotherMachine() async throws {
     let transcript = read?["text"]?.string ?? ""
     return read?["state"]?.string == "idle" && transcript.contains("Scout: Keep going.") && transcript.contains("This message is from the bot")
   })
+  // The last item read is the last thing said, not the turn's end.
+  let last = await tools.call("read_session", arguments: .object(["sessionID": .string(sessionID), "limit": .integer(1)]),
+                              caller: bot).structuredContent
+  #expect(last?["text"]?.string?.hasPrefix("#") == true, "\(String(describing: last))")
   let idle = await tools.call("stop_session", arguments: .object(["sessionID": .string(sessionID)]), caller: bot)
   #expect(idle.structuredContent == .object(["sessionID": .string(sessionID)]), "\(text(idle))")
   let messages = try await onB.call(SessionItems(sessionID: sessionID)).filter {

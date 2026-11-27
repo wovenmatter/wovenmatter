@@ -376,7 +376,7 @@ private struct SessionFormCard: View {
 private extension View {
     func sessionInteractionCardStyle(_ theme: WovenTheme) -> some View {
         padding(13)
-            .frame(maxWidth: 768, alignment: .leading)
+            .frame(maxWidth: ConversationMetrics.column, alignment: .leading)
             // The tint over the window's own colour: the chat scrolls under
             // these cards, and must not show through them.
             .background(theme.palette.themeWhisper)

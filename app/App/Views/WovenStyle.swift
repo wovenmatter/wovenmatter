@@ -380,6 +380,9 @@ enum WovenMetrics {
     static let assetToolbarControlWidth: CGFloat = 28
     static let assetToolbarControlHeight: CGFloat = 30
     static let assetToolbarVerticalPadding: CGFloat = 2
+    /// The workspace's floating header buttons: the tallest one, and its inset.
+    static let floatingControlSize: CGFloat = 36
+    static let floatingControlInset: CGFloat = 12
     static let shellGap: CGFloat = 8
     static let windowAlignedSurfaceMinimumRadius: CGFloat = 12
     static let cardRadius: CGFloat = 14

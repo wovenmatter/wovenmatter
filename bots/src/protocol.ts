@@ -737,7 +737,7 @@ export type MirrorConversation = {
 };
 
 /** A visual reply a bot published with `render_html` (not a Page artifact); its HTML is in the server's content store. */
-export type VisualReply = { title: string; height: number; digest: string; size: number };
+export type VisualReply = { title: string; height: number; width?: number; digest: string; size: number };
 
 export type MirrorItem = {
   /** Stable forever, unique within the bot: `<entryId>` or `<entryId>.<n>`. */

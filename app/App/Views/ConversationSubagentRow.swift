@@ -7,9 +7,9 @@ struct ConversationSubagentRow: View {
 
     var body: some View {
         DisclosureGroup(isExpanded: Binding(get: { expanded }, set: { transcriptInteraction(); expanded = $0 })) {
-            VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: ConversationMetrics.rowGap) {
                 if let task = child.task?.nonempty { textBlock("Task", task) }
-                VStack(alignment: .leading, spacing: 3) {
+                VStack(alignment: .leading, spacing: ConversationMetrics.hair) {
                     metadata("Model", child.modelID)
                     metadata("Provider", child.provider)
                     metadata("Connection", child.connectionLabel?.nonempty ?? child.connectionID)
@@ -21,10 +21,10 @@ struct ConversationSubagentRow: View {
                 if let activity = child.activity, !activity.isEmpty { entries("Activity", activity) }
                 if let history = child.history, !history.isEmpty { entries("Recent Messages", history) }
             }
-            .padding(.top, 6)
-            .padding(.leading, 4)
+            .padding(.top, ConversationMetrics.rowGap)
+            .padding(.leading, ConversationMetrics.tight)
         } label: {
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
+            HStack(alignment: .firstTextBaseline, spacing: ConversationMetrics.rowGap) {
                 Text(child.name?.nonempty ?? "Subagent")
                     .font(.system(size: 12.5, weight: .medium))
                 if let label = child.statusLabel?.nonempty {
@@ -50,7 +50,7 @@ struct ConversationSubagentRow: View {
     }
 
     private func textBlock(_ label: String, _ value: String) -> some View {
-        VStack(alignment: .leading, spacing: 3) {
+        VStack(alignment: .leading, spacing: ConversationMetrics.hair) {
             Text(label).font(.system(size: 11.5, weight: .medium))
             Text(String(value.prefix(120_000)))
                 .font(.system(size: 12.5))
@@ -62,9 +62,9 @@ struct ConversationSubagentRow: View {
 
     private func entries(_ label: String, _ values: [AgentRunSubagentActivity]) -> some View {
         DisclosureGroup(label) {
-            VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: ConversationMetrics.rowGap) {
                 ForEach(values) { entry in
-                    VStack(alignment: .leading, spacing: 3) {
+                    VStack(alignment: .leading, spacing: ConversationMetrics.hair) {
                         Text(entry.title?.nonempty ?? entry.kind?.capitalized ?? "Activity")
                             .font(.system(size: 11.5, weight: .medium))
                         if let status = entry.status?.nonempty { metadata("Status", status) }
@@ -77,7 +77,7 @@ struct ConversationSubagentRow: View {
                     }
                 }
             }
-            .padding(.top, 5)
+            .padding(.top, ConversationMetrics.tight)
         }
         .font(.system(size: 11.5))
         .foregroundStyle(WovenPalette.mutedForeground)

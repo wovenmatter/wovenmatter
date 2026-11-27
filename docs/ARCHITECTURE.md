@@ -218,6 +218,13 @@ behind one adapter interface in the server and are treated alike:
   its result) the server writes it once to `session_items`, in the same step as
   it announces it. Partial text is never written while it streams. When a
   turn is stopped, what was said so far is saved as the finished item.
+  Items are numbered in the order they finish; a tool call the server saw
+  start carries where it started, counted rather than timed (the session's
+  last saved item then, and its place among the calls that started), and
+  clients show it in that place. When a turn ends, the server saves a
+  `turnEnded` notice before it says so, so every view times the turn from
+  its saved end, and its text is "stopped" when Stop was asked while the
+  turn ran; views draw nothing for it.
 - A tool call's stored input and output are each capped at 256K characters;
   the start and the end are kept, with a line saying how much was left out.
 - A script a harness runs in code mode, calling tools from JavaScript, is
@@ -233,13 +240,16 @@ behind one adapter interface in the server and are treated alike:
   25 MiB) on that machine. A visual reply is not a Page: it belongs to its chat only, is not in
   the Library and is never edited. Its HTML is stored once, in the content
   store; the session gets one small item, `visualReply` (title, starting
-  height, digest), saved when the tool is called, after the text so far. The
+  height, the width it asked for if any, digest, and whether the page starts
+  with its own title, read from the source so the chat can place a caption
+  before the page loads), saved when the tool is called, after the text so far. The
   runtime's own report of the call keeps only the HTML's length, and the chat
   shows the visual reply in its place. The chat shows it above the agent's text
   in an opaque sandboxed frame, with no access to the app, its tools or the
   session, and a machine that does not hold it fetches it by digest. The frame
   takes the height of the visual reply's content as it changes, so one sized by
-  the viewport (vh, vmin, vmax) is refused.
+  the viewport (vh, vmin, vmax) is refused. It is the chat's width, or the
+  narrower width the agent asked for.
 - A client that subscribes gets the newest 200 finished items, the item in
   progress if there is one, then live events. Older items are fetched a page
   at a time as the person scrolls back.

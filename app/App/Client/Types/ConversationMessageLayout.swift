@@ -19,10 +19,10 @@ struct ConversationMessageLayout {
             }
         }
 
-        var spacingBefore: Double {
+        var spacingBefore: CGFloat {
             // The card adds its own gap only when it has visible changes.
             if case .fileChanges = content { return 0 }
-            return 32
+            return ConversationMetrics.turnGap
         }
     }
 
@@ -46,11 +46,9 @@ struct ConversationMessageLayout {
 
 /// Every turn shows how long it ran, and a failure, whether or not it has work to show.
 struct ConversationWorkTranscriptPresentation {
-    let hasVisibleActivities: Bool
     let failureMessage: String?
 
-    init(runStatus: RunStatus, runError: String?, hasVisibleActivities: Bool) {
-        self.hasVisibleActivities = hasVisibleActivities
+    init(runStatus: RunStatus, runError: String?) {
         if runStatus == .failed {
             let detail = runError?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             failureMessage = detail.isEmpty ? "No error details were provided." : detail
@@ -67,10 +65,12 @@ enum ConversationScrollAction: Equatable {
     case followBottom
 }
 
+/// A transcript's scroll geometry as bot chats and the Forum follow it.
 struct ConversationGeometry: Equatable {
     let contentHeight: CGFloat
-    let isNearBottom: Bool
-    var viewportHeight: CGFloat? = nil
+    let viewportHeight: CGFloat
+    /// How far the end is below what shows.
+    let endDistance: CGFloat
 }
 
 struct ConversationScrollState: Equatable {
@@ -110,7 +110,7 @@ struct ConversationScrollState: Equatable {
                                   isPrependingHistory: Bool) -> Bool {
         let resized = previous.contentHeight != current.contentHeight || previous.viewportHeight != current.viewportHeight
         let follow = resized && isNearBottom && !isUserScrolling && !transcriptOwnsScroll && !isPrependingHistory
-        setNearBottom(current.isNearBottom && !transcriptOwnsScroll)
+        setNearBottom(current.isAtLiveEdge && !transcriptOwnsScroll)
         return follow
     }
 
@@ -120,16 +120,12 @@ struct ConversationScrollState: Equatable {
     }
 }
 
-/// Work groups follow new rows only from their existing live edge. Replacing
+/// A live reasoning list follows new text only from its existing live edge. Replacing
 /// content, settling a tool, or opening its details must preserve reading position.
 struct ConversationWorkScrollState: Equatable {
     private(set) var isAtBottom = true
 
     mutating func setAtBottom(_ value: Bool) { isAtBottom = value }
-
-    func shouldFollowAppend(from before: [String], to after: [String], wasAtBottom: Bool? = nil) -> Bool {
-        (wasAtBottom ?? isAtBottom) && after.count > before.count && after.starts(with: before)
-    }
 
     func shouldFollowTextAppend(from before: String, to after: String, wasAtBottom: Bool? = nil) -> Bool {
         (wasAtBottom ?? isAtBottom) && after.utf16.count > before.utf16.count && after.utf16.starts(with: before.utf16)

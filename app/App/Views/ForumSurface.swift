@@ -11,7 +11,6 @@ struct ForumWorkspace: View {
     let headerInsets: BotHeaderInsets
     let focusGeneration: Int?
     let startsComposerCollapsed: Bool
-    let usesCompactSpacing: Bool
     let showsClosePanel: Bool
     let showsAddPanel: Bool
     let onActivate: () -> Void
@@ -28,7 +27,7 @@ struct ForumWorkspace: View {
             HStack(spacing: 0) {
                 if split {
                     pane(roomID: nil, insets: BotHeaderInsets(left: headerInsets.left, right: 0),
-                         showsClose: showsClosePanel, showsAdd: false, compact: true)
+                         showsClose: showsClosePanel, showsAdd: false)
                     BotThreadResizer(threadWidth: $threadWidth, available: geometry.size.width)
                     threadPane(wide: wide, split: true, insets: BotHeaderInsets(left: 0, right: headerInsets.right), showsClose: false, showsAdd: showsAddPanel)
                         .frame(width: BotThreadSplit.clamped(threadWidth, available: geometry.size.width))
@@ -42,7 +41,7 @@ struct ForumWorkspace: View {
     }
 
     private func pane(roomID: Int?, insets: BotHeaderInsets, showsClose: Bool, showsAdd: Bool,
-                      compact: Bool = false, showsPause: Bool = true, actions: [BotPaneAction] = []) -> some View {
+                      showsPause: Bool = true, actions: [BotPaneAction] = []) -> some View {
         ForumPane(
             bots: bots,
             controller: bots.forumRoom(roomID: roomID),
@@ -52,7 +51,6 @@ struct ForumWorkspace: View {
             showsPausedBanner: showsPause,
             focusGeneration: focusGeneration,
             startsComposerCollapsed: startsComposerCollapsed,
-            usesCompactSpacing: usesCompactSpacing || compact,
             showsClosePanel: showsClose,
             showsAddPanel: showsAdd,
             onActivate: onActivate,
@@ -77,7 +75,7 @@ struct ForumWorkspace: View {
             onRoute(.forum(machineID: target.machineID))
         })
         // Beside the Forum, the Forum's own pane already says it is paused.
-        return pane(roomID: roomID, insets: insets, showsClose: showsClose, showsAdd: showsAdd, compact: split,
+        return pane(roomID: roomID, insets: insets, showsClose: showsClose, showsAdd: showsAdd,
                     showsPause: !split, actions: actions)
     }
 }
@@ -95,7 +93,6 @@ private struct ForumPane: View {
     let showsPausedBanner: Bool
     let focusGeneration: Int?
     let startsComposerCollapsed: Bool
-    let usesCompactSpacing: Bool
     let showsClosePanel: Bool
     let showsAddPanel: Bool
     let onActivate: () -> Void
@@ -107,6 +104,8 @@ private struct ForumPane: View {
     @Environment(\.wovenTheme) private var theme
     @State private var attached: ForumRoomStore?
     @State private var following = true
+    /// The newest content is out of view or behind the composer stack.
+    @State private var endObscured = false
     @State private var isUserScrolling = false
     @State private var shownPosts = ForumPane.postPage
     @State private var bottomStackHeight: CGFloat = 0
@@ -147,7 +146,7 @@ private struct ForumPane: View {
             header
             if isPaused, showsPausedBanner {
                 ForumPausedBanner(busy: pausing) { setPaused(false) }
-                    .frame(maxWidth: 768)
+                    .frame(maxWidth: ConversationMetrics.column)
                     .padding(.horizontal, 32)
                     .padding(.bottom, 8)
             }
@@ -157,7 +156,7 @@ private struct ForumPane: View {
                                      showsFixes: item.status.kind == .paused || item.status.kind == .fallback) {
                     dismissedStatuses.insert(item.key)
                 }
-                .frame(maxWidth: 768)
+                .frame(maxWidth: ConversationMetrics.column)
                 .padding(.horizontal, 32)
                 .padding(.bottom, 8)
             }
@@ -254,34 +253,26 @@ private struct ForumPane: View {
                     transcriptContent(proxy)
                     Color.clear
                         .frame(height: bottomClearance)
-                        .padding(.top, 24)
                         .id(Self.endID)
                 }
-                .frame(maxWidth: 768)
+                .frame(maxWidth: ConversationMetrics.column)
                 .frame(maxWidth: .infinity)
                 .padding(.horizontal, 32)
                 .padding(.top, 16)
             }
             .scrollIndicators(.never)
-            // Text fades under the header instead of being cut off at it.
-            .mask {
-                VStack(spacing: 0) {
-                    LinearGradient(colors: [.clear, .black], startPoint: .top, endPoint: .bottom).frame(height: 14)
-                    Color.black
-                }
-            }
+            // Opening or selecting something is the reader taking over: the
+            // newest reply no longer pulls the view down.
+            .environment(\.conversationTranscriptInteraction) { following = false }
             .defaultScrollAnchor(isNewThread ? .top : .bottom, for: .initialOffset)
             .defaultScrollAnchor(.top, for: .sizeChanges)
             .onScrollPhaseChange { _, phase in
                 isUserScrolling = phase == .interacting || phase == .tracking || phase == .decelerating
             }
             .onScrollGeometryChange(for: ConversationGeometry.self) { geometry in
-                ConversationGeometry(
-                    contentHeight: geometry.contentSize.height,
-                    isNearBottom: geometry.visibleRect.maxY >= geometry.contentSize.height - 90,
-                    viewportHeight: geometry.containerSize.height
-                )
+                ConversationGeometry(geometry)
             } action: { old, new in
+                if new.isObscured != endObscured { endObscured = new.isObscured }
                 let resized = old.contentHeight != new.contentHeight || old.viewportHeight != new.viewportHeight
                 if isNewThread {
                     // A new thread opens at the top, with its starting post in view.
@@ -293,7 +284,7 @@ private struct ForumPane: View {
                     }
                 } else if !resized || isUserScrolling {
                     // Any movement of the reader's own decides whether the newest post stays in view.
-                    following = new.isNearBottom
+                    following = new.isAtLiveEdge
                 }
             }
             .onChange(of: controller.loading) { _, loading in
@@ -305,16 +296,9 @@ private struct ForumPane: View {
                 guard !controller.loading, following, !isNewThread else { return }
                 jumpToEnd(proxy)
             }
-            .overlay(alignment: .bottomTrailing) {
-                if !following {
-                    Button("Latest post", systemImage: "arrow.down") {
-                        following = true
-                        jumpToEnd(proxy)
-                    }
-                    .buttonStyle(WovenQuietButtonStyle())
-                    .padding(.trailing, 32)
-                    .padding(.bottom, bottomClearance)
-                }
+            .conversationEdges(stackHeight: bottomStackHeight, jumpLabel: following || !endObscured ? nil : "Latest post") {
+                following = true
+                jumpToEnd(proxy)
             }
         }
         .simultaneousGesture(TapGesture().onEnded { onActivate() })
@@ -391,17 +375,10 @@ private struct ForumPane: View {
     /// Who has a turn running here, so it shows that bots saw a post before any has answered.
     @ViewBuilder private var thinkingRow: some View {
         if let text = PiBotForumRoomState.thinkingText(controller.state.thinking.compactMap(name)) {
-            VStack(alignment: .leading, spacing: 6) {
-                HStack(spacing: 8) {
-                    Image(systemName: "brain").frame(width: 17)
-                        .foregroundStyle(WovenPalette.mutedForeground)
-                    Text(text)
-                        .font(.system(size: 13))
-                        .foregroundStyle(WovenPalette.mutedForeground)
-                }
-                ConversationRunningDots()
+            VStack(alignment: .leading, spacing: ConversationMetrics.labelGap) {
+                ConversationThinkingLabel(text: text)
+                ConversationRunningDots().padding(.leading, ConversationMetrics.textInset)
             }
-            .padding(.horizontal, 4)
             .frame(maxWidth: .infinity, alignment: .leading)
             .accessibilityElement(children: .combine)
         }
@@ -438,41 +415,25 @@ private struct ForumPane: View {
         VStack(spacing: 8) {
             if let error = controller.error {
                 BotDismissibleError(text: error) { controller.error = nil }
-                    .frame(maxWidth: 768)
-                    .padding(.horizontal, showsClosePanel || showsAddPanel ? PanelControlButton.size + 8 : 0)
+                    .frame(maxWidth: ConversationMetrics.column)
             }
-            HStack(alignment: .bottom, spacing: 8) {
-                Group {
-                    if showsClosePanel {
-                        PanelControlButton(glyph: .panelRightOpen, accessibilityLabel: "Remove panel", help: "Remove panel", action: onClosePanel)
-                    } else if showsAddPanel {
-                        Color.clear
-                            .frame(width: PanelControlButton.size, height: PanelControlButton.size)
-                            .allowsHitTesting(false)
-                            .accessibilityHidden(true)
-                    }
-                }
-                .padding(.bottom, ConversationComposer.verticalPadding)
-                VStack(alignment: .leading, spacing: 6) {
-                    if let note = draftMentions.note { ForumMentionNote(text: note) }
-                    composer
-                }
-                .frame(maxWidth: 768)
-                Group {
-                    if showsAddPanel {
-                        PanelControlButton(glyph: .panelLeftOpen, accessibilityLabel: "Add panel", help: "Add panel", action: onAddPanel)
-                    } else if showsClosePanel {
-                        Color.clear
-                            .frame(width: PanelControlButton.size, height: PanelControlButton.size)
-                            .allowsHitTesting(false)
-                            .accessibilityHidden(true)
-                    }
-                }
-                .padding(.bottom, ConversationComposer.verticalPadding)
+            VStack(alignment: .leading, spacing: 6) {
+                if let note = draftMentions.note { ForumMentionNote(text: note) }
+                composer
             }
+            .frame(maxWidth: ConversationMetrics.column)
         }
         .frame(maxWidth: .infinity)
-        .padding(.horizontal, usesCompactSpacing ? 12 : 32)
+        .padding(.horizontal, ConversationMetrics.sideInset)
+        .conversationPanelControls {
+            if showsClosePanel {
+                PanelControlButton(glyph: .panelRightOpen, accessibilityLabel: "Remove panel", help: "Remove panel", action: onClosePanel)
+            }
+        } trailing: {
+            if showsAddPanel {
+                PanelControlButton(glyph: .panelLeftOpen, accessibilityLabel: "Add panel", help: "Add panel", action: onAddPanel)
+            }
+        }
         .padding(.top, 8)
         .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { bottomStackHeight = max(0, $0) }
         .padding(.bottom, ConversationBottomOverlayLayout.bottomOffset)
@@ -605,14 +566,12 @@ private struct ForumPostRow: View {
     @FocusState private var focusedAction: Action?
 
     var body: some View {
-        HStack(spacing: 0) {
-            if post.isUser { Spacer(minLength: 72) }
-            VStack(alignment: post.isUser ? .trailing : .leading, spacing: 6) {
+        ConversationMessageRowLayout(trailing: post.isUser) {
+            VStack(alignment: post.isUser ? .trailing : .leading, spacing: ConversationMetrics.labelGap) {
                 if !post.isUser {
                     Text(post.name)
                         .font(.system(size: 12, weight: .medium))
                         .foregroundStyle(WovenPalette.foreground)
-                        .padding(.horizontal, 4)
                 }
                 if post.isUser {
                     ConversationUserBubble(content: post.text.trimmingCharacters(in: .whitespacesAndNewlines)) { EmptyView() }
@@ -620,14 +579,11 @@ private struct ForumPostRow: View {
                         Text("Scheduled")
                             .font(.system(size: 11.5))
                             .foregroundStyle(WovenPalette.mutedForeground)
-                            .padding(.horizontal, 4)
                     }
                 } else if let visualReply = post.visualReply {
-                    ConversationHTMLRenderView(reference: visualReply).padding(.horizontal, 4)
+                    ConversationHTMLRenderView(reference: visualReply)
                 } else {
                     ConversationResponse(content: post.text, isStreaming: false, showsCopyButton: false)
-                        .padding(.horizontal, 4)
-                        .padding(.vertical, 2)
                 }
                 ForEach(post.unanswered) { note in
                     InlineError(text: "\(note.name) didn't answer: \(note.reason)")
@@ -640,7 +596,6 @@ private struct ForumPostRow: View {
                 actions
             }
             .frame(maxWidth: post.isUser ? nil : .infinity, alignment: post.isUser ? .trailing : .leading)
-            if !post.isUser { Spacer(minLength: 0) }
         }
         .fixedSize(horizontal: false, vertical: true)
         .contentShape(Rectangle())

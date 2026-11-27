@@ -160,13 +160,21 @@ function visualReplyOf(json: string | null): VisualReply | undefined {
   if (json === null) return undefined;
   try {
     const value = JSON.parse(json) as Partial<VisualReply>;
-    return typeof value.digest === "string"
-      ? { title: String(value.title ?? ""), height: Number(value.height) || 0, digest: value.digest, size: Number(value.size) || 0 }
-      : undefined;
+    if (typeof value.digest !== "string") return undefined;
+    const width = Number(value.width);
+    return {
+      title: String(value.title ?? ""),
+      height: Number(value.height) || 0,
+      ...(Number.isInteger(width) && width > 0 ? { width } : {}),
+      digest: value.digest,
+      size: Number(value.size) || 0,
+    };
   } catch {
     return undefined;
   }
 }
+
+const withVisualReply = (visualReply: VisualReply | undefined) => (visualReply ? { visualReply } : {});
 
 const toPost = (row: PostRow): ForumPostRecord => ({
   id: row.id,
@@ -180,7 +188,7 @@ const toPost = (row: PostRow): ForumPostRecord => ({
   auto: row.is_auto === 1,
   ...(row.origin_conversation === null ? {} : { origin: row.origin_conversation }),
   ...(row.context ? { context: row.context } : {}),
-  ...(visualReplyOf(row.visual_reply) ? { visualReply: visualReplyOf(row.visual_reply) as VisualReply } : {}),
+  ...withVisualReply(visualReplyOf(row.visual_reply)),
   createdAt: row.created_at,
 });
 

@@ -2,7 +2,8 @@ import AppKit
 import SwiftUI
 
 struct PanelControlButton: View {
-    static let size: CGFloat = 36
+    /// As wide as the margin beside the transcript's column, which it sits in.
+    static let size: CGFloat = 32
 
     let glyph: LucideGlyph
     let accessibilityLabel: String
@@ -242,6 +243,7 @@ struct ConversationComposer: View {
                 style: .continuous
             )
         )
+        .conversationGlassSnapshot(radius: WovenMetrics.composerRadius)
         .overlay {
             RoundedRectangle(cornerRadius: WovenMetrics.composerRadius, style: .continuous)
                 .stroke(

@@ -23,7 +23,12 @@ import WovenProtocol
   #expect(abs(answered.lastActivityAt.timeIntervalSince(start.addingTimeInterval(2))) < 0.01)
 
   #expect(try await library.updateSession(session.id, read: true).unread == false)
-  _ = try await library.appendItem(sessionID: session.id, content: .assistantMessage(text: "More"),
+  // A turn's end, which no view draws, neither marks the chat unread nor moves it.
+  _ = try await library.appendItem(sessionID: session.id, content: .notice(Notice(kind: .turnEnded, text: "")),
                                    createdAt: start.addingTimeInterval(3))
+  let ended = try await listed()
+  #expect(!ended.unread && abs(ended.lastActivityAt.timeIntervalSince(start.addingTimeInterval(2))) < 0.01)
+  _ = try await library.appendItem(sessionID: session.id, content: .assistantMessage(text: "More"),
+                                   createdAt: start.addingTimeInterval(4))
   #expect(try await listed().unread)
 }

@@ -1001,3 +1001,74 @@ struct FolderHoverCard: View {
             .fixedSize(horizontal: false, vertical: true)
     }
 }
+
+/// Lays its subviews out in rows, wrapping to a new row when one is full.
+struct FlowLayout: Layout {
+    let horizontalSpacing: CGFloat
+    let verticalSpacing: CGFloat
+
+    func sizeThatFits(
+        proposal: ProposedViewSize,
+        subviews: Subviews,
+        cache: inout ()
+    ) -> CGSize {
+        let result = layout(subviews: subviews, width: proposal.width ?? .infinity)
+        return CGSize(width: proposal.width ?? result.width, height: result.height)
+    }
+
+    func placeSubviews(
+        in bounds: CGRect,
+        proposal: ProposedViewSize,
+        subviews: Subviews,
+        cache: inout ()
+    ) {
+        var x = bounds.minX
+        var y = bounds.minY
+        var lineHeight: CGFloat = 0
+
+        for subview in subviews {
+            let size = Self.size(of: subview, within: bounds.width)
+            if x > bounds.minX, x + size.width > bounds.maxX {
+                x = bounds.minX
+                y += lineHeight + verticalSpacing
+                lineHeight = 0
+            }
+            subview.place(
+                at: CGPoint(x: x, y: y),
+                anchor: .topLeading,
+                proposal: ProposedViewSize(size)
+            )
+            x += size.width + horizontalSpacing
+            lineHeight = max(lineHeight, size.height)
+        }
+    }
+
+    private func layout(subviews: Subviews, width: CGFloat) -> CGSize {
+        var x: CGFloat = 0
+        var y: CGFloat = 0
+        var lineHeight: CGFloat = 0
+        var contentWidth: CGFloat = 0
+
+        for subview in subviews {
+            let size = Self.size(of: subview, within: width)
+            if x > 0, x + size.width > width {
+                x = 0
+                y += lineHeight + verticalSpacing
+                lineHeight = 0
+            }
+            contentWidth = max(contentWidth, x + size.width)
+            x += size.width + horizontalSpacing
+            lineHeight = max(lineHeight, size.height)
+        }
+
+        return CGSize(width: contentWidth, height: y + lineHeight)
+    }
+
+    /// A subview's own size, or, when that is wider than a row, its size
+    /// within the row, so it shrinks rather than running out of view.
+    private static func size(of subview: LayoutSubview, within width: CGFloat) -> CGSize {
+        let size = subview.sizeThatFits(.unspecified)
+        guard width.isFinite, size.width > width else { return size }
+        return subview.sizeThatFits(ProposedViewSize(width: width, height: nil))
+    }
+}

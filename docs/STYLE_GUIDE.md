@@ -420,18 +420,148 @@ when an intentional design change is accepted.
   runs, thinking and assistant messages stream visibly in chronological order.
   The elapsed header (with a chevron) folds its thinking, commentary and tool
   calls at any time, and the turn folds them itself when it ends, leaving the
-  reply, an error, a proposed plan or an inline page in view. Live tool calls append as
+  reply, an error, a proposed plan or an inline page in view. A failed turn's
+  header keeps the compact red status; the error's own words under it are
+  reading text, in a reply's size and ink. A finished turn's header shows its
+  saved time, the same in every view. A turn in which the
+  reader opened a row, group or thought while it ran stays open when it ends. Live tool calls append as
   separate rows in the conversation; never replace the preceding tool with the
   latest call. A new thinking, commentary,
   or other standalone event condenses only the preceding tool list into a
   reopenable disclosure. Show supplied subagent rows at their event position.
   Preserve the reader's position; follow new work
-  or reasoning only from the live edge. Between a tool and the next visible output,
-  use a static Thinking label. Thinking is marked with a static brain, in chats
+  or reasoning only from the live edge. Only the reader decides whether the
+  transcript follows: scrolling away, opening or selecting something stops it,
+  and scrolling back to the end or Latest reply resumes it; layout never does.
+  A chat opens at its end, with the end of its last reply clear of the composer. Between a tool and the next visible output,
+  use a static Thinking label, also while a delegated task still runs above
+  the last finished row. Thinking is marked with a static brain, in chats
   and bot chats. While a turn runs, one row of three small dots sits under the
-  last thing it shows, its strong dot stepping left to right, still under
-  Reduce Motion. Keep detail-loading text quiet ("Loading details…")
+  last thing it shows, starting where that thing's text starts, its strong dot
+  stepping left to right, still under Reduce Motion: at the work lane's text edge, or at the reply's. The
+  turn's fold at its end is instantaneous. Keep detail-loading text quiet ("Loading details…")
   and never add a separate mobile running spinner below the transcript.
+- **Conversation layout:** agent chats, bot chats and the Forum share one rhythm
+  from `ConversationMetrics`; keep exact values there. Everything in an assistant
+  turn starts at one left edge, and user messages, the assistant turn and the
+  composer share one column and so one right edge. A long user message
+  collapses to six lines only when that hides at least three more at its width;
+  otherwise it shows whole, with no control. In a narrow column a user message
+  keeps a smaller space on its left. Gaps come from roles: one gap
+  between turns in both directions; work, reply, files and the changed-files card
+  are sections; work-log entries sit closer, and rows inside a group closer
+  still. Commentary sits close to the tools it introduces and further from the
+  work before it. The work log is a secondary lane: everything in it is one
+  size below the reply, commentary a step quieter than the reply's ink, tool
+  labels quieter, reasoning quietest; a row whose call is still running, and
+  the waiting Thinking row, take a step stronger ink until they finish, in
+  place; its text starts at one inset, with only
+  icons left of it, and open work ends a section and a half above the reply. A
+  visual reply and the reply that explains it are one answer, a section apart;
+  among work rows a visual reply keeps a reply's distance from the rows on
+  either side, so none reads as its caption.
+  Under the header, work, a visual reply or a reply that opens with a box
+  starts a section below it, and reply text an entry gap, in every state; the
+  work divider is drawn in the middle of that gap over foldable work that is
+  showing, never over a Thinking row with nothing in it yet or the dots, so it
+  never adds or removes height. A unit of work is a sentence of commentary and
+  the tools it introduces, a section above it and a label gap inside; once
+  the turn has settled, a thought row after a tool starts a section the same
+  way (while it runs, rows keep the place of the "Thinking" row they replace); a
+  thought that led to the sentence, untitled or only its title, has no row of
+  its own: the sentence stays commentary, at the lane's text inset with no
+  icon, and a chevron after it opens the reasoning. Elsewhere a thought that is
+  only its title is its line in reasoning's ink at the text inset, with no icon
+  and nothing to open; one that opens keeps the brain and a chevron, in
+  reasoning's ink and regular weight. Anywhere else a thought keeps
+  its row; none is ever lost. Tool rows are one line across the row, cut at the
+  end, with the chevron right after the label; the
+  full text is in their details, which open at the rows' text inset and wrap
+  rather than scroll sideways. Every harness's tool rows use one grammar: a
+  verb and a short object (Read docs/README.md, Listed sample, Searched for
+  “x” in docs), paths relative to the folder the tool ran in, or else to the folder of the
+  turn's first path (fixed, so a shown row never changes), or else their last
+  two components, and commands without the folder plumbing in front of them. A
+  command shows as written only when its runtime titled the row with it;
+  under a tool's name ("Bash") the row names only the program. A
+  plain read-only shell search, listing or file read takes the same words as the
+  file tool, since a row never claims what its command did not do: an option
+  it does not know, or a search a runtime describes only in its own words,
+  names no pattern or place ("Searched files"). An interpreter fed only a
+  script reads as that ("Ran a Python script"); any other command shows its
+  first line that does something (not a comment or `set`), every part of it,
+  with an ellipsis only for the lines after it, and before the command is
+  known, "Running a command", never a tool's name. A harness's own helper is
+  named for what it does ("Looked up tools", "Loaded the dataviz skill"), a
+  delegated task is one row named by its task ("Delegated “Fetch release
+  notes”"); any other tool keeps its name. Verbs are past tense once done.
+  Woven's visual tools have one label each, previewed or shown (shown only once
+  the chat shows it), and a group
+  names every kind of step in the rows' words ("Listed 1 folder and read 2
+  files"), each file once, failures with the kind that failed ("1 edit failed",
+  "Ran 2 commands, 1 failed", "2 commands failed") and a warning on the group
+  when any row failed, two kinds of search each by name, a web search as one
+  whatever its row's detail, and one or two tools by name when their rows show
+  plain names (a step whose row is a phrase is counted, never quoted), never
+  an unnamed action; one step of a kind is said in its own words where they
+  are short ("searched palette.md"), two or more are counted by a noun ("ran 3
+  searches"), never "1 time"; a
+  narrow column takes the same facts in short ("1 folder listed · 2 files read"). Thinking looks the same everywhere.
+  Live reasoning shows its last three lines as plain lines of one pitch, with
+  no space between paragraphs or blocks, its cut top line fading out, under
+  its title once it has one (the title is never prose in the trace); afterwards a
+  thought with text is one closed row named by its title or leading heading,
+  else "Thought", never by its raw text; one with no text draws nothing. A
+  record such as an approval is named by status and action, with its own glyph. A visual
+  reply shows its page alone, with no outline around it, the column wide or
+  as wide as it asked to be; its title, unless the page starts with that same
+  heading, is a caption above it, 14-point semibold, a label gap above
+  it, one line cut at its end. Its controls float in its top corner and show
+  on hover, while zoomed, or with focus. Copy takes the whole answer: the
+  visual reply's text, then the reply's. Under the reply, Copy and the files it
+  refers to share one wrapping row, as tall as a file chip in every state;
+  Copy's hover box is the size of the panel buttons' and starts a label gap
+  below the text (the row an entry gap below it when it holds files); a link in the text to one
+  of those files opens it as its chip does, and one to a file without a chip
+  stays plain text. In reply text,
+  lists sit tighter than paragraphs but clearly looser than a line: 8 under a
+  top-level item of one line and 10 under one that wraps, 6 and 8 within a
+  nested list, decided by the item above alone; two different lists in a row
+  stand a section gap apart,
+  every item keeps its marker, an item's later blocks (after its
+  nested list too) start at its text indent, its level's item gap below what
+  precedes them (a line of only links after a nested list, a citation, sits a
+  label gap and a little raised under what it cites, with the wrapped-item gap
+  below it), quoted text is a step quieter than the text around it (the
+  step commentary takes), a task's box is one drawn square,
+  filled with a check or outlined, headings attach to what follows them, and
+  code, tables and quotes keep the same space on each side and start at their
+  block's indent. A code line that wraps continues two cells right of its own
+  indent, never past half the box, after a quiet wrap mark drawn in that
+  indent. Short inline code in prose, and a short link with the brackets and
+  punctuation around it, moves to the next line whole rather
+  than break, unless it would take more than two thirds of that line. Inline code is shaded around its own text on each line, a
+  little smaller than the text it sits in, in a table cell too. Table
+  columns fit their content, never narrower than short code or a short value
+  they keep whole; a table nearly as wide as the text fills it, and one too
+  wide gives the rest to its widest column; when even their least does not
+  fit, the widest give way and break, so no cell is cut off. A table too
+  narrow for its content breaks code of several words between its words
+  only where that makes it shorter, as laid out, and otherwise takes the
+  room from its prose columns, moving a few points between its two widest
+  prose columns when that saves a line. In a narrow column
+  cells keep less padding. Each block's spacing depends only on the block before it, so streamed
+  text never moves. Nothing moves when a turn settles: the dots hold the row
+  Copy then takes, and parts with nothing to show draw nothing. In agent chats,
+  bot chats and the Forum alike, the transcript uses the panel's whole height:
+  rows scroll up to the top edge, fading out over its last 6 points only, and
+  down behind the glass composer, which shows them through it. At the ends of a
+  chat the first row clears the floating buttons and the last rests above the
+  composer. The button back to the latest reply or post is a small round one
+  centred above the composer, on its own background. The composer is exactly
+  as wide as the messages' column in every chat, bot chat and the Forum; the
+  panel buttons sit centred in the margins beside it, on its bottom row, and
+  the rightmost floating header button sits directly above the right one.
 - **Scrolling:** hide scrollbars throughout the app while preserving scrolling. Set
   `.scrollIndicators(.never)` on SwiftUI scroll views and editors, including
   sheets and popovers. Disable both scrollers on AppKit `NSScrollView` editors.
