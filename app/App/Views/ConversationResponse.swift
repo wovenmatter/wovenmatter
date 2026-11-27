@@ -164,12 +164,15 @@ struct ConversationResponse: View {
             Image(systemName: copied ? "checkmark" : "doc.on.doc")
                 .font(.system(size: 13, weight: .medium))
                 .foregroundStyle(WovenPalette.foreground.opacity(0.72))
-                .frame(width: ConversationMetrics.actionRowHeight, height: ConversationMetrics.actionRowHeight)
+                // The hover box of the other icon buttons (the panel buttons).
+                .frame(width: PanelControlButton.size, height: PanelControlButton.size)
                 .contentShape(Rectangle())
         }
         .buttonStyle(WovenIconButtonStyle())
-        // The glyph lines up with the text edge; its hover target hangs left of it.
-        .padding(.leading, -(ConversationMetrics.actionRowHeight - 13) / 2)
+        // It takes the action row's height in the layout, its hover box
+        // reaching past it, and its glyph lines up with the text edge.
+        .padding(.vertical, -(PanelControlButton.size - ConversationMetrics.actionRowHeight) / 2)
+        .padding(.leading, -(PanelControlButton.size - 13) / 2)
         .help("Copy complete response")
         .accessibilityLabel(copied ? "Response copied" : "Copy response")
     }
