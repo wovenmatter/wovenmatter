@@ -412,6 +412,8 @@ export async function startRuntime(
         await mirror?.close();
         await memory?.close();
         await opened.close();
+        // Every model call's usage is saved before the store closes.
+        await opened.registry.usageSaved();
         availability.close();
         await availability.flushed();
         if (env?.shutdown) await env.shutdown();

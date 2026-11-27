@@ -32,6 +32,8 @@ export const MEMORY_TABLE = "bot_memory";
  * counts usage from these and the entries.
  */
 export const USAGE_TABLE = "bot_usage";
+/** Tries of one usage save before it is given up. */
+const USAGE_ATTEMPTS = 3;
 
 /** A bot's memory: facts oldest first, and the newest entry id extraction has read. */
 export type BotMemory = {
@@ -180,6 +182,8 @@ async function writeMemory(
 export class BotRegistry {
   readonly #db: SqliteDatabase;
 
+  readonly #usageWrites = new Set<Promise<void>>();
+
   constructor(db: SqliteDatabase) {
     this.#db = db;
   }
@@ -238,6 +242,7 @@ export class BotRegistry {
       ) STRICT;
       CREATE TABLE IF NOT EXISTS ${USAGE_TABLE} (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
+        call_id TEXT NOT NULL UNIQUE,
         bot_id TEXT NOT NULL,
         conversation_id INTEGER NOT NULL,
         purpose TEXT NOT NULL,
@@ -259,13 +264,37 @@ export class BotRegistry {
 
   /**
    * Saves one model call made outside a conversation's entries, for `conversationId` of `botId`
-   * (`""` for a Forum room). A call that used nothing is not saved.
+   * (`""` for a Forum room), under its own identifier, so a retried save keeps one row. A failed
+   * save is tried again a few times. A call that used nothing is not saved.
    */
-  async recordUsage(botId: string, conversationId: number, purpose: string, usage: ModelCallUsage): Promise<void> {
-    if (!(usage.input || usage.output || usage.cacheRead || usage.cacheWrite || usage.cost)) return;
+  recordUsage(botId: string, conversationId: number, purpose: string, usage: ModelCallUsage): Promise<void> {
+    if (!(usage.input || usage.output || usage.cacheRead || usage.cacheWrite || usage.cost)) return Promise.resolve();
+    const callId = randomUUID();
+    const work = (async () => {
+      for (let attempt = 1; ; attempt += 1) {
+        try {
+          return await this.#insertUsage(callId, botId, conversationId, purpose, usage);
+        } catch (error) {
+          if (attempt >= USAGE_ATTEMPTS) throw error;
+          await new Promise((resolve) => setTimeout(resolve, 100 * attempt));
+        }
+      }
+    })();
+    this.#usageWrites.add(work);
+    void work.catch(() => {}).finally(() => this.#usageWrites.delete(work));
+    return work;
+  }
+
+  /** Resolves once every usage save begun has ended, before the database closes. */
+  async usageSaved(): Promise<void> {
+    while (this.#usageWrites.size) await Promise.allSettled([...this.#usageWrites]);
+  }
+
+  async #insertUsage(callId: string, botId: string, conversationId: number, purpose: string, usage: ModelCallUsage) {
     await this.#db.run(
-      `INSERT INTO ${USAGE_TABLE} (bot_id, conversation_id, purpose, created_at, provider, model, input, output,
-        cache_read, cache_write, cost, response_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT OR IGNORE INTO ${USAGE_TABLE} (call_id, bot_id, conversation_id, purpose, created_at, provider, model, input,
+        output, cache_read, cache_write, cost, response_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      callId,
       botId,
       conversationId,
       purpose,

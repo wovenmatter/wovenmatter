@@ -5,6 +5,8 @@ import { describe, expect, it } from "vitest";
 import { openSharedDatabase } from "../src/storage/database.ts";
 import { BotRegistry, USAGE_TABLE } from "../src/storage/registry.ts";
 import { TitleGenerator } from "../src/titles.ts";
+import type { Api, Model, Models } from "@earendil-works/pi-ai";
+import { CLAUDE_AGENT_API, compactNative } from "../src/compaction/native.ts";
 import { providerUsage, replyUsage } from "../src/usage.ts";
 import { FAUX_MODEL, tempDir } from "./helpers.ts";
 
@@ -50,5 +52,42 @@ describe("usage outside a conversation", () => {
       cost: 0.5,
     });
     expect(providerUsage(undefined, "p", "m", 1)).toBeUndefined();
+  });
+
+  it("reports a compaction call's usage before its answer is refused", async () => {
+    const used: unknown[] = [];
+    const models = {
+      stream: () => ({ result: async () => ({ stopReason: "stop", usage: { input: 9, output: 2, cacheRead: 0, cacheWrite: 0 } }) }),
+    } as unknown as Models;
+    const model = { provider: "claude", id: "c", api: CLAUDE_AGENT_API } as unknown as Model<Api>;
+    await expect(compactNative({ models, model, messages: [], onUsage: (usage) => used.push(usage) })).rejects.toThrow();
+    expect(used).toEqual([{ input: 9, output: 2, cacheRead: 0, cacheWrite: 0 }]);
+  });
+
+  it("saves a call's usage once under its own identifier, trying again after a failed save, before the store closes", async () => {
+    const dir = await tempDir();
+    const db = await openSharedDatabase(join(dir.path, "bots.sqlite"));
+    try {
+      let failures = 1;
+      const flaky = new Proxy(db, {
+        get(target, key) {
+          const value = Reflect.get(target, key, target);
+          if (key !== "run") return typeof value === "function" ? value.bind(target) : value;
+          return async (sql: string, ...values: unknown[]) => {
+            if (sql.includes(USAGE_TABLE) && failures-- > 0) throw new Error("disk I/O error");
+            return (value as (...args: unknown[]) => unknown).call(target, sql, ...values);
+          };
+        },
+      });
+      const registry = new BotRegistry(flaky);
+      await registry.createTables();
+      void registry.recordUsage("b1", 1, "memory", { provider: "p", model: "m", at: 1, input: 3, output: 1, cacheRead: 0, cacheWrite: 0, cost: 0 });
+      await registry.usageSaved();
+      const rows = await db.all<{ n: number; ids: number }>(`SELECT COUNT(*) AS n, COUNT(DISTINCT call_id) AS ids FROM ${USAGE_TABLE}`);
+      expect(rows).toEqual([{ n: 1, ids: 1 }]);
+    } finally {
+      await db.close();
+      await dir.cleanup();
+    }
   });
 });

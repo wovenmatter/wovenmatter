@@ -238,6 +238,14 @@ export class NativeCompaction {
     return [...prefix, ...withoutSystem(own)];
   }
 
+  /** Saves what one native compaction call used, for `conversationId`, in the shape its provider reports. */
+  #usage(conversationId: number, model: Model<Api>): (usage: unknown) => void {
+    return (usage) => {
+      const used = providerUsage(usage, model.provider, model.id, Date.now());
+      if (used) this.#options.onUsage?.(conversationId, used);
+    };
+  }
+
   /** The portable summary, at the conversation's own reasoning level. */
   async #portable(
     conversation: Conversation,
@@ -328,6 +336,7 @@ export class NativeCompaction {
           : delta;
       try {
         const outcome = await compactNative({
+          onUsage: this.#usage(api.conversationId as unknown as number, model),
           models: this.models(),
           model,
           messages: [...(system ? [system] : []), ...covered],
@@ -338,8 +347,6 @@ export class NativeCompaction {
           signal: ctx.abortSignal,
         });
         if (!("unsupported" in outcome)) {
-          const used = providerUsage(outcome.usage, model.provider, model.id, Date.now());
-          if (used) this.#options.onUsage?.(api.conversationId as unknown as number, used);
           await this.#commit(conversation, api, compaction, saved, coveredIds, system, {
             id: `${api.taskId}`,
             route: outcome.route,
@@ -477,6 +484,7 @@ export class NativeCompaction {
     let next: ActiveWindow | undefined;
     if (this.#native(model)) {
       const outcome = await compactNative({
+        onUsage: this.#usage(conversation.id as unknown as number, model),
         models: this.models(),
         model,
         messages,

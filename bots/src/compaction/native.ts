@@ -273,6 +273,8 @@ export type CompactRequest = {
   readonly reasoning?: Reasoning;
   readonly fetch?: FetchFunction;
   readonly signal?: AbortSignal;
+  /** Given what the provider says the call used, as soon as it answers, before its answer is checked. */
+  readonly onUsage?: (usage: unknown) => void;
 };
 
 /** Run the model's native compaction. `unsupported` when the route has none. */
@@ -339,6 +341,7 @@ async function claudeAgentCompact(request: CompactRequest): Promise<NativeOutcom
     usage?: unknown;
     botCompaction?: { summary?: string };
   };
+  if (result.usage !== undefined) request.onUsage?.(result.usage);
   const summary = result.botCompaction?.summary;
   if (result.stopReason === "error" || result.stopReason === "aborted" || !summary) {
     throw new NativeCompactionError(
@@ -392,6 +395,7 @@ async function responsesCompact(
   const native = (await readJson(response)) as
     | { output?: unknown; usage?: unknown; model?: unknown }
     | undefined;
+  if (native?.usage !== undefined) request.onUsage?.(native.usage);
   if (!response.ok) {
     if (unsupportedResponse(response.status, native)) {
       return { unsupported: `${route.endpoint}/compact answered ${response.status}` };
@@ -516,8 +520,15 @@ async function codexCompact(
   let count = 0;
   let completed: Json | undefined;
   let emitted = false;
+  let used = false;
   for await (const event of sseEvents(response, request.signal)) {
     const type = event.type;
+    // A finished, failed or cut-off response reports its usage once, before it is checked.
+    const reported = (event.response as Json | undefined)?.usage;
+    if (!used && reported !== undefined) {
+      used = true;
+      request.onUsage?.(reported);
+    }
     if (type === "error" || type === "response.failed" || type === "response.incomplete") {
       const failure = (event.response as Json | undefined) ?? event;
       const unsupported =
@@ -600,6 +611,7 @@ async function anthropicCompact(
   const native = (await readJson(response)) as
     | { content?: unknown; stop_reason?: unknown; usage?: unknown }
     | undefined;
+  if (native?.usage !== undefined) request.onUsage?.(native.usage);
   if (!response.ok) {
     if (unsupportedResponse(response.status, native)) {
       return { unsupported: `Anthropic compaction answered ${response.status}` };
