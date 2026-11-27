@@ -334,16 +334,6 @@ extension Library {
     }
   }
 
-  /// When a setting was last written, by any machine, with its value.
-  public func settingWritten(_ key: String) async throws -> (value: JSONValue, at: Date)? {
-    try await read { db in
-      guard let row = try db.query("SELECT id, value, stamp FROM settings WHERE id = ? AND deleted = 0 AND value != 'null'",
-                                   [.text(key)]).first,
-            let stamp = Stamp(text: row.text("stamp") ?? "") else { return nil }
-      return (try Self.setting(row).value, Date(timeIntervalSince1970: Double(stamp.time) / 1000))
-    }
-  }
-
   /// Sets a setting everywhere; setting `null` unsets it.
   @discardableResult
   public func setSetting(_ key: String, to value: JSONValue) async throws -> Setting {

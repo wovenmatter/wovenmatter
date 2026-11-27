@@ -226,7 +226,6 @@ extension BotsHost {
     hold = .sending(target: target)
     progress(target, .stopping)
     await reconcileHost()
-    await handingOver.run()
     var started = false
     do {
       progress(target, .exporting)
@@ -235,11 +234,16 @@ extension BotsHost {
       try await prepareEngine()
       try await hosting.files.run(.export, configURL, archives)
       let expected = try await library.botsTransferExpected()
+      // The bots are stopped: their store is read to its end where it can be,
+      // and the new host counts what lies after the place handed over.
+      await usage.read()
+      let place = await usage.place()
       let files = try Self.listFiles(in: botsFolder, as: "bots") + Self.listFiles(in: archives, as: "files")
       let total = files.reduce(0) { $0 + $1.size }
       progress(target, .copying, sent: 0, total: total)
       asking()
-      _ = try await client.call(ReceiveBots(transferID: id, files: files, expected: expected), timeout: Self.callLimit)
+      _ = try await client.call(ReceiveBots(transferID: id, files: files, expected: expected, usagePlace: place),
+                                timeout: Self.callLimit)
       var sent: Int64 = 0
       for file in files {
         let url = (file.path.hasPrefix("bots/") ? botsFolder : archives)
@@ -416,6 +420,9 @@ extension BotsHost {
   // MARK: The target
 
   /// `ReceiveBots`: a transfer from the host's server begins.
+  /// Where the old host had read the bots' store to, kept with what was received.
+  static let usagePlaceFile = "usage-place"
+
   func receive(_ request: ReceiveBots, caller: Caller) async throws {
     let source = caller.hello.machine.id
     // The library's value: the cached one may not have caught up with sync yet.
@@ -446,6 +453,7 @@ extension BotsHost {
         throw ProtocolError(.failed, "Could not write \(url.path).")
       }
     }
+    try Data((request.usagePlace ?? "").utf8).write(to: incomingFolder.appendingPathComponent(Self.usagePlaceFile))
     try writeMarker(TransferMarker(id: request.transferID, machineID: source, step: IncomingStep.receiving), to: incomingMarker)
     incoming = IncomingTransfer(id: request.transferID, source: source, files: request.files, expected: request.expected)
     startWatchdog()
@@ -516,6 +524,9 @@ extension BotsHost {
     try stillCurrent(id)
     try writeMarker(TransferMarker(id: id, machineID: transfer.source, step: IncomingStep.installed), to: incomingMarker)
     incoming?.phase = .installing
+    // Before the store is here to be read: count only what the old host did not.
+    let place = (try? String(contentsOf: incomingFolder.appendingPathComponent(Self.usagePlaceFile), encoding: .utf8)) ?? ""
+    try await usage.install(place.isEmpty ? nil : place)
     remove(botsFolder)
     let received = incomingFolder.appendingPathComponent("bots", isDirectory: true)
     if FileManager.default.fileExists(atPath: received.path) {

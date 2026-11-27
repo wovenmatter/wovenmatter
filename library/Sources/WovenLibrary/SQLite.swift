@@ -63,6 +63,10 @@ public final class ReadOnlyDatabase: @unchecked Sendable {
   public init(path: String) throws { connection = try Connection(path: path, readOnly: true) }
 
   public func query(_ sql: String, _ values: [SQLValue] = []) throws -> [Row] { try connection.query(sql, values) }
+
+  /// Runs `body` in one read transaction: everything it reads is from the
+  /// same moment of the file.
+  public func snapshot<T>(_ body: () throws -> T) throws -> T { try connection.snapshot(body) }
 }
 
 /// A thin wrapper over one SQLite connection. Not thread-safe: its owner

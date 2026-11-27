@@ -330,6 +330,24 @@ func mirrorPushIsSavedOnceWithItsCheckpoint() async throws {
   #expect(posts.map(\.author) == [ItemAuthor(botID: "b1", name: "Ada")])
 }
 
+/// A purge on the bots' host reads their store first, so what the bot's
+/// tables hold is counted before they go.
+@Test(.timeLimit(.minutes(1)))
+func aPurgeReadsTheBotsUsageFirst() async throws {
+  let runtime = StandInBotsRuntime()
+  let host = try await TestServer.start(name: "Studio", runtime: runtime)
+  defer { host.finishLater() }
+  let client = try await host.connect()
+  try await host.makeHost(client, runtime)
+  let reads = Mutex<[Bool]>([])
+  host.server.bots.usage.set(BotsUsageHook.Actions(read: {
+    reads.withLock { $0.append(runtime.received.contains { $0["type"]?.string == "bots.purge" }) }
+  }, place: { nil }, install: { _ in }))
+  _ = try await client.call(BotsCall(request: json(#"{"type": "bots.purge", "botId": "b1"}"#)))
+  #expect(reads.withLock { $0 } == [false])
+  #expect(runtime.received.contains { $0["type"]?.string == "bots.purge" })
+}
+
 @Test(.timeLimit(.minutes(1)))
 func callsAndOpenedConversationsPassThroughToTheRuntime() async throws {
   let runtime = StandInBotsRuntime()
@@ -476,7 +494,17 @@ func transferMovesTheBotsAndSwitchesTheHostWithNothingTwice() async throws {
   let before = try #require(try await setup.onA.call(ListSavedBots()).chats.first { $0.kind == .main })
   _ = try await setup.onA.call(UpdateSession(sessionID: before.session.id, archived: true, folderID: "f1"))
 
+  // Where the old host had counted the bots' store to goes with them, and is
+  // taken over before the store is in place.
+  let installed = Mutex<[String?]>([])
+  a.server.bots.usage.set(BotsUsageHook.Actions(read: {}, place: { "counted to here" }, install: { _ in }))
+  let storeFile = b.folder.appendingPathComponent("bots/bots.json").path
+  b.server.bots.usage.set(BotsUsageHook.Actions(read: {}, place: { nil }, install: { place in
+    #expect(!FileManager.default.fileExists(atPath: storeFile))
+    installed.withLock { $0.append(place) }
+  }))
   _ = try await setup.onA.call(TransferBots(targetMachineID: b.server.machineID))
+  #expect(installed.withLock { $0 } == ["counted to here"])
 
   // The folder and the files moved, the host switched, and the old copy is gone.
   #expect(FileManager.default.contents(atPath: b.folder.appendingPathComponent("bots/bots.json").path) != nil)

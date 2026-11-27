@@ -110,3 +110,20 @@ private func response(_ id: String, session: String = "s", model: String = "m", 
   #expect(try await days("Asia/Kathmandu") == ["2026-03-08": 1, "2026-03-09": 3])
   #expect(try await days("Pacific/Auckland") == ["2026-03-08": 1, "2026-03-09": 3])
 }
+
+/// A bot's usage is filed under that bot's chat on the machine that read
+/// it, never under another machine's chat of the same bot.
+@Test func botUsageIsFiledOnlyUnderThisMachinesChat() async throws {
+  let a = try await usageLibrary("a"), b = try await usageLibrary("b")
+  try await b.saveBotMirror(BotMirror(
+    bot: BotMirror.Bot(id: "b1", name: "Ada", isAdmin: false, manager: false, managerID: nil, orchestrator: false, trashed: false,
+                       createdAt: Date()),
+    chats: [BotMirror.Chat(sessionID: "chat-on-b", botID: "b1", conversationID: 1, kind: .main, parentConversationID: nil,
+                           title: "Ada", pinned: false, createdAt: Date())],
+    items: [], checkpoint: "bot:b1", upTo: 0))
+  try await pull(b, into: a)
+  try await a.saveUsage([UsageEntry(id: "bots:r1", runtime: .bots, nativeSession: "b1/1", woven: true, model: "m", at: Date(),
+                                    input: 5, output: 1)], source: UsageSource(id: "x"))
+  let groups = try await a.usage(from: .distantPast, to: .distantFuture, periodSeconds: 86_400).groups
+  #expect(groups.count == 1 && groups[0].sessionID == nil && groups[0].inWoven)
+}

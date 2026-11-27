@@ -58,8 +58,8 @@ actor BotsHost {
 
   let library: Library
   let peers: PeerSync
-  /// Run once the bots are stopped for a move to another machine.
-  nonisolated let handingOver = HandOverHook()
+  /// Keeps the bots' usage counted across a purge and a move.
+  nonisolated let usage = BotsUsageHook()
   private let interface: BotsHostInterface
   let tenure: BotsTenure
   let hosting: BotsHosting
@@ -536,6 +536,8 @@ actor BotsHost {
       throw ProtocolError(.badRequest, "\(type ?? "") goes through SubscribeBots.")
     }
     if hostID == thisMachine {
+      // A purge drops the bot's tables: what they hold is counted first.
+      if type == "bots.purge" { await usage.read() }
       return try await withCheckedThrowingContinuation { continuation in
         do { try send(request, .call(continuation)) } catch { continuation.resume(throwing: error) }
       }

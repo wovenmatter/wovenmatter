@@ -309,10 +309,11 @@ extension Library {
 
   /// The Woven Matter session a harness session's usage is filed under. A
   /// bot's chat is `<bot>/<conversation>` and a Forum room `forum/<room>`,
-  /// as the bots' store names them; any other harness session is the one
+  /// as the bots' store names them, among this machine's chats; any other
+  /// harness session is the one
   /// `native_sessions` names. Several sessions can name one harness
   /// session; the first by identifier is it.
-  private static func wovenSession(runtime: String, nativeSession: String, _ db: Connection) throws -> String? {
+  private static func wovenSession(runtime: String, nativeSession: String, machine: String, _ db: Connection) throws -> String? {
     guard runtime == RuntimeKind.bots.rawValue else {
       return try db.query("SELECT MIN(session_id) AS id FROM native_sessions WHERE runtime = ? AND handle = ?",
                           [.text(runtime), .text(nativeSession)]).first?.text("id")
@@ -322,8 +323,8 @@ extension Library {
     let bot = parts[0] == "forum" ? "" : parts[0]
     return try db.query("""
       SELECT MIN(c.session_id) AS id FROM bot_chats c JOIN sessions s ON s.id = c.session_id
-      WHERE c.bot_id = ? AND c.conversation_id = ? AND c.deleted = 0 AND s.deleted = 0
-      """, [.text(bot), .integer(conversation)]).first?.text("id")
+      WHERE c.bot_id = ? AND c.conversation_id = ? AND c.deleted = 0 AND s.deleted = 0 AND s.machine_id = ?
+      """, [.text(bot), .integer(conversation), .text(machine)]).first?.text("id")
   }
 
   /// Writes the synced row of one group from the ledger, unless it already
@@ -340,7 +341,7 @@ extension Library {
     // A group whose responses all moved to an earlier observation's group,
     // or were found to restate others, is kept with nothing in it.
     let empty = sums["latest"] == .null
-    let session = try wovenSession(runtime: group.runtime, nativeSession: group.nativeSession, db)
+    let session = try wovenSession(runtime: group.runtime, nativeSession: group.nativeSession, machine: writer.machineID, db)
     let cost: Double = switch sums["cost"] {
     case .real(let value): value
     case .integer(let value): Double(value)

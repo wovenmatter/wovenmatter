@@ -20,13 +20,22 @@ final class HistoryTurnHook: Sendable {
   func tell() { action.withLock { $0 }?() }
 }
 
-/// Told, and waited for, before the bots leave this machine, so their
-/// usage is read while their store is still here.
-final class HandOverHook: Sendable {
-  private let action = Mutex<(@Sendable () async -> Void)?>(nil)
+/// How the bots' host keeps their usage counted across a purge and a move:
+/// it reads their store first, hands over where it read it to, and, on the
+/// machine they move to, takes that place over before the store arrives.
+final class BotsUsageHook: Sendable {
+  struct Actions: Sendable {
+    var read: @Sendable () async -> Void
+    var place: @Sendable () async -> String?
+    var install: @Sendable (String?) async throws -> Void
+  }
 
-  func set(_ value: @escaping @Sendable () async -> Void) { action.withLock { $0 = value } }
-  func run() async { await action.withLock { $0 }?() }
+  private let actions = Mutex<Actions?>(nil)
+
+  func set(_ value: Actions) { actions.withLock { $0 = value } }
+  func read() async { await actions.withLock { $0 }?.read() }
+  func place() async -> String? { await actions.withLock { $0 }?.place() }
+  func install(_ place: String?) async throws { try await actions.withLock { $0 }?.install(place) }
 }
 
 /// Names a new chat from the person's first message, the same way for every

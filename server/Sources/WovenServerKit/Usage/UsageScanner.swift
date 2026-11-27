@@ -54,7 +54,7 @@ actor UsageScanner {
   /// most of a history read and saved in one step; `slice` how long one pass
   /// reads before it ends, by `clock`.
   init(library: Library, home: URL, environment: [String: String] = [:], stores: [(kind: PiStoreKind, url: URL)] = [],
-       chunk: Int = 64 * 1024 * 1024,
+       chunk: Int = 64 * 1024 * 1024, storePage: Int = 2000,
        slice: Duration = .seconds(20), willRead: (@Sendable (String) async -> Void)? = nil,
        clock: (@Sendable () -> Duration)? = nil, sleep: (@Sendable (Duration) async -> Void)? = nil,
        log: @escaping @Sendable (String) -> Void = { FileHandle.standardOutput.write(Data(("woven-server: " + $0 + "\n").utf8)) }) {
@@ -62,6 +62,7 @@ actor UsageScanner {
     self.home = home
     self.environment = environment
     self.stores = stores
+    self.storePage = max(storePage, 1)
     self.chunk = max(chunk, 1)
     self.slice = slice
     let origin = ContinuousClock.now
@@ -301,7 +302,8 @@ actor UsageScanner {
     case .file(let file):
       try await read(file, size: item.size, modified: item.modified, known: known, deadline: deadline, into: &pass)
     case .store(let path, let source, let kind):
-      try await readStore(path, source: source, kind: kind, size: item.size, modified: item.modified, known: known, into: &pass)
+      try await readStore(path, source: source, kind: kind, size: item.size, modified: item.modified, known: known, deadline: deadline,
+                          into: &pass)
     case .openCode(let path, let source):
       try await readOpenCode(path, source: source, size: item.size, modified: item.modified, known: known,
                              deadline: deadline, into: &pass)
@@ -368,7 +370,7 @@ actor UsageScanner {
 
     let openCode = home.appendingPathComponent(".local/share/opencode/opencode.db")
     for store in stores {
-      histories.append(.store(path: store.url.path, source: Self.source(store.kind.runtime.rawValue, store.url.path), kind: store.kind))
+      histories.append(.store(path: store.url.path, source: Self.storeSource(store.kind, store.url), kind: store.kind))
     }
     histories.append(.openCode(path: openCode.path, source: Self.openCodeSource))
     if let configured = extra("XDG_DATA_HOME", "opencode/opencode.db", default: openCode) {
@@ -813,40 +815,51 @@ actor UsageScanner {
   // MARK: Pi Durable and bots
 
   /// A Pi Durable store is read on from its place in each table set, which
-  /// must still be there; one replaced is read again. It is read whole in
-  /// one step.
+  /// must still be there; one replaced is read again. It is read a page at
+  /// a time, each page at one moment of the store and saved with its place,
+  /// until the read reaches its end or the slice is used up.
   private func readStore(_ path: String, source: String, kind: PiStoreKind, size: Int64, modified: Int64, known: UsageSource?,
-                         into pass: inout Pass) async throws -> Bool {
+                         deadline: Duration? = nil, into pass: inout Pass) async throws -> Bool {
     guard let counted = try await begin(known, id: source, size: size, modified: modified) else { return true }
+    var saved = counted
     do {
       let database = try ReadOnlyDatabase(path: path)
       var place = PiStorePlace()
-      if let known, known.boundary == Self.start, let saved = try? JSONDecoder().decode(PiStorePlace.self, from: Data(known.state.utf8)) {
-        place = saved
+      if let known, known.boundary == Self.start, let stored = try? JSONDecoder().decode(PiStorePlace.self, from: Data(known.state.utf8)) {
+        place = stored
       }
-      // The bots' store moves with them: what it holds from before this
-      // machine became their host was counted by the host it was on then.
-      var since: Date?
-      if kind == .bots {
-        guard let host = try await library.settingWritten(botsHostSetting), host.value.string == library.machineID else {
-          try await library.saveUsage([], source: UsageSource(id: source, size: size, modified: modified, boundary: Self.start,
-                                                              state: counted.state))
-          return true
+      while true {
+        let read = try PiStoreReader.read(database, kind: kind, after: place, limit: storePage)
+        let stopped = read.more && (Task.isCancelled || deadline.map { clock() >= $0 } ?? false)
+        let next = UsageSource(id: source, size: read.more ? 0 : size, modified: read.more ? 0 : modified, boundary: Self.start,
+                               state: try Self.encode(read.place), interrupted: read.more && !stopped ? counted.interrupted : 0)
+        try await commit(read.entries, next, into: &pass)
+        saved = next
+        place = read.place
+        if !read.more || stopped {
+          pass.read += 1
+          return !read.more
         }
-        since = host.at
       }
-      let read = try PiStoreReader.read(database, kind: kind, after: place, since: since)
-      let next = UsageSource(id: source, size: size, modified: modified, boundary: Self.start, state: try Self.encode(read.place))
-      try await commit(read.entries, next, into: &pass)
-      pass.read += 1
     } catch {
-      try await passOver(counted, size: size, modified: modified)
+      try await passOver(saved, size: size, modified: modified)
+      return true
     }
-    return true
   }
 
-  /// Reads the stores of `kind` at once, outside the passes: the bots' just
-  /// before they move to another machine.
+  /// The rows of a store read in one step.
+  private let storePage: Int
+
+  /// The bots' store has one key wherever it is, so its place means the
+  /// same on every machine the bots move to.
+  static let botsStoreSource = source("bots", "store")
+
+  private static func storeSource(_ kind: PiStoreKind, _ url: URL) -> String {
+    kind == .bots ? botsStoreSource : source(kind.runtime.rawValue, url.path)
+  }
+
+  /// Reads the stores of `kind` to their end at once, outside the passes:
+  /// the bots' before a bot is purged or the bots move.
   func readStores(_ kind: PiStoreKind) async {
     var pass = Pass()
     let sources = (try? await library.usageSources()) ?? [:]
@@ -860,9 +873,23 @@ actor UsageScanner {
         size += fileSize
         modified = max(modified, fileModified)
       }
-      let source = Self.source(kind.runtime.rawValue, path)
+      let source = Self.storeSource(kind, store.url)
       _ = try? await readStore(path, source: source, kind: kind, size: size, modified: modified, known: sources[source], into: &pass)
     }
+  }
+
+  /// Where the bots' store has been read to, to hand over with the bots.
+  func botsPlace() async -> String? {
+    guard let known = try? await library.usageSources()[Self.botsStoreSource], known.boundary == Self.start else { return nil }
+    return known.state
+  }
+
+  /// Takes over where the host the bots came from had read their store to,
+  /// before the bots start or the store is read here; with none, the store
+  /// is read from its start.
+  func installBotsPlace(_ place: String?) async throws {
+    try await library.saveUsage([], source: UsageSource(id: Self.botsStoreSource, boundary: place == nil ? "" : Self.start,
+                                                        state: place ?? ""))
   }
 
   // MARK: OpenCode

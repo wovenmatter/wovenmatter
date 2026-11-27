@@ -123,10 +123,14 @@ public struct ReceiveBots: Request {
   public var transferID: String
   public var files: [BotsTransferFile]
   public var expected: BotsTransferExpected
-  public init(transferID: String, files: [BotsTransferFile], expected: BotsTransferExpected) {
+  /// Where the old host had counted the bots' store to: the new host counts
+  /// what comes after it.
+  public var usagePlace: String?
+  public init(transferID: String, files: [BotsTransferFile], expected: BotsTransferExpected, usagePlace: String? = nil) {
     self.transferID = transferID
     self.files = files
     self.expected = expected
+    self.usagePlace = usagePlace
   }
 }
 
