@@ -654,6 +654,7 @@ private struct ConversationThinkingBlock: View {
             group: ConversationWorkGroup(id: activity.id, activities: [activity], endsTimeline: isLive),
             runID: runID, runStatus: isLive ? .running : .completed, followsAppends: isLive,
             maximumHeight: maximumHeight,
+            linePitch: maximumHeight == Self.liveHeight ? ConversationResponse.Style.plainLinePitch : nil,
             // A live trace with no position of the reader's own starts at its latest lines.
             initialScrollSnapshot: transcriptState?.workScrollSnapshot(scrollKey) ?? localScrollSnapshot
                 ?? ConversationWorkScrollSnapshot(offset: 0, isAtBottom: isLive),
@@ -899,12 +900,17 @@ private struct ConversationBoundedWorkList: View {
     let runStatus: RunStatus
     let followsAppends: Bool
     var maximumHeight = Self.maximumHeight
+    /// The pitch of the lines when every line box is one (a live trace): the
+    /// top fade then covers only the part of a line the window cuts.
+    var linePitch: CGFloat? = nil
     let initialScrollSnapshot: ConversationWorkScrollSnapshot
     let saveScrollSnapshot: (ConversationWorkScrollSnapshot) -> Void
     @State private var contentHeight = Self.maximumHeight
     @State private var scrollState = ConversationWorkScrollState()
     @State private var scrollPosition = ScrollPosition(edge: .top)
     @State private var scrollOffset: CGFloat = 0
+    /// The content's height and the window's, as the scroll view last reported.
+    @State private var scrolledHeights = (content: CGFloat(0), viewport: CGFloat(0))
     @State private var reasoningText: [String: String] = [:]
     @State private var growthStartedAtBottom = false
     @State private var isUserScrolling = false
@@ -922,6 +928,15 @@ private struct ConversationBoundedWorkList: View {
     }
     /// A tool row is at least one line of its label.
     private static let smallestRow: CGFloat = 16
+
+    /// How far the top fade reaches: with lines on one pitch, only over the
+    /// part of the line the window's top edge cuts (lines end at the
+    /// content's end), none when it cuts between two; else an entry gap.
+    private var topFade: CGFloat {
+        guard let linePitch, linePitch > 0 else { return ConversationMetrics.entryGap }
+        let cut = (scrolledHeights.content - scrollOffset).truncatingRemainder(dividingBy: linePitch)
+        return cut < 0.5 || linePitch - cut < 0.5 ? 0 : min(cut, ConversationMetrics.entryGap)
+    }
 
     var body: some View {
             ScrollView(.vertical) {
@@ -944,7 +959,7 @@ private struct ConversationBoundedWorkList: View {
         .mask {
             VStack(spacing: 0) {
                 LinearGradient(colors: [.clear, .black], startPoint: .top, endPoint: .bottom)
-                    .frame(height: scrollOffset > 0.5 && !reduceTransparency ? ConversationMetrics.entryGap : 0)
+                    .frame(height: scrollOffset > 0.5 && !reduceTransparency ? topFade : 0)
                 Color.black
             }
         }
@@ -958,6 +973,7 @@ private struct ConversationBoundedWorkList: View {
                   viewportHeight: geometry.containerSize.height)
         } action: { before, after in
             if restoringScroll {
+                scrolledHeights = (after.contentHeight, after.viewportHeight)
                 scrollOffset = after.offset
                 scrollState.setAtBottom(after.isAtBottom)
                 // A compact preview may be at its bottom before the saved
@@ -973,6 +989,7 @@ private struct ConversationBoundedWorkList: View {
                 return
             }
             growthStartedAtBottom = after.contentHeight > before.contentHeight && before.isAtBottom
+            scrolledHeights = (after.contentHeight, after.viewportHeight)
             scrollOffset = after.offset
             scrollState.setAtBottom(after.isAtBottom)
         }

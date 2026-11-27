@@ -422,9 +422,20 @@ public struct VisualReply: Codable, Sendable, Hashable {
   /// styles or scripts: text a style hides, or a heading a script writes,
   /// can make the two differ. An empty `<svg>` before any text counts as a
   /// drawing its script fills with text of its own.
+  /// The named character references a generated page commonly writes in a
+  /// heading; others stay as written.
+  private static let namedCharacters: [String: Unicode.Scalar] = [
+    "amp": "&", "lt": "<", "gt": ">", "quot": "\"", "apos": "'", "nbsp": "\u{A0}",
+    "mdash": "\u{2014}", "ndash": "\u{2013}", "hellip": "\u{2026}", "lsquo": "\u{2018}", "rsquo": "\u{2019}",
+    "ldquo": "\u{201C}", "rdquo": "\u{201D}", "copy": "\u{A9}", "reg": "\u{AE}", "trade": "\u{2122}",
+    "times": "\u{D7}", "middot": "\u{B7}", "bull": "\u{2022}", "deg": "\u{B0}", "euro": "\u{20AC}",
+    "pound": "\u{A3}", "yen": "\u{A5}", "cent": "\u{A2}", "laquo": "\u{AB}", "raquo": "\u{BB}",
+  ]
+
   public static func sourceLead(html: String) -> String {
     let s = Array(html.unicodeScalars)
     var i = 0
+    // The heading and caption tags open now, each once, the latest last.
     var headings: [String] = []
     var collecting: String?
     var text = ""
@@ -483,7 +494,10 @@ public struct VisualReply: Codable, Sendable, Hashable {
           if name == "br" { text += "\u{2028}" }
           continue
         }
-        if heading { if closing { headings.removeAll { $0 == name } } else { headings.append(name) } }
+        if heading {
+          headings.removeAll { $0 == name }
+          if !closing { headings.append(name) }
+        }
         continue
       }
       // A character, or an entity standing for one.
@@ -491,7 +505,7 @@ public struct VisualReply: Codable, Sendable, Hashable {
       var next = i + 1
       if scalar == "&", let end = find(";", from: i, within: 10) {
         let entity = lower((i + 1)..<end)
-        let named: [String: Unicode.Scalar] = ["amp": "&", "lt": "<", "gt": ">", "quot": "\"", "apos": "'", "nbsp": "\u{A0}"]
+        let named = Self.namedCharacters
         let number = entity.hasPrefix("#x") ? UInt32(entity.dropFirst(2), radix: 16)
           : entity.hasPrefix("#") ? UInt32(entity.dropFirst()) : nil
         if let found = named[entity] ?? number.flatMap(Unicode.Scalar.init) { scalar = found; next = end + 1 }

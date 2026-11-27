@@ -69,6 +69,8 @@ func aVisualReplysLeadIsItsFirstTextWhenThatIsAHeadingOrCaption() {
     ("<title>T</title><style>h2{}</style><body>\n<h2 class=\"t\">Monthly &amp; values</h2><p>x</p>", "Monthly & values"),
     ("<!-- <h1>no</h1> --><table><caption>Sales <b>by</b>\n quarter</caption><tr><td>1</td></tr></table>", "Sales by quarter"),
     ("<table><tr><th>Month</th></tr></table><h2>Later</h2>", ""),
+    ("<h2>Revenue &mdash; Q4 &ldquo;draft&rdquo; &copy; &euro;5&hellip;</h2>", "Revenue \u{2014} Q4 \u{201C}draft\u{201D} \u{A9} \u{20AC}5\u{2026}"),
+    (String(repeating: "<h1><h2>", count: 2000) + "Deep</h2>", "Deep"),
     ("<script>document.write('<h2>x</h2>')</script><canvas></canvas>", ""),
     // A chart its script draws comes before a caption kept for screen readers.
     ("<svg id=\"c\" viewBox=\"0 0 1 1\"></svg><table class=\"sr\"><caption>Monthly values</caption></table>", ""),

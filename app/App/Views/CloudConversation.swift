@@ -741,6 +741,9 @@ struct CloudConversation: View {
     }
 
     private static let liveEdgeTolerance = ConversationEnd.liveEdge
+    /// How long after a viewport change the scroll view's own moves belong to
+    /// it (its follow-up pass came about 8 to 13 ms after).
+    private static let viewportSettle: CFTimeInterval = 0.1
 
     /// Geometry is only measured here. Whether the transcript follows the end
     /// is the reader's: their own scroll, Latest reply, or opening or
@@ -768,7 +771,12 @@ struct CloudConversation: View {
         // from the end or onto it; when something resized in the same
         // update, one that left the end further away (keeping the bottom
         // never does), or one that reached the end.
-        let readerInput = ConversationReaderInput.isRecent(for: measured.scrollView, isActivePanel: isActivePanel)
+        // The scroll view's own move in the passes right after a viewport
+        // change is the layout's, even with VoiceOver on.
+        let now = CACurrentMediaTime()
+        if after.viewportHeight != before.viewportHeight { measured.viewportChangedAt = now }
+        let readerInput = ConversationReaderInput.isRecent(for: measured.scrollView, isActivePanel: isActivePanel,
+            countsVoiceOver: now - measured.viewportChangedAt > Self.viewportSettle)
         let movedAway = after.distance > max(before.distance, Self.liveEdgeTolerance)
         let arrived = after.distance <= Self.liveEdgeTolerance && before.distance > Self.liveEdgeTolerance
         let moved = after.offset != before.offset
@@ -1200,6 +1208,8 @@ private final class TranscriptMeasurements {
     /// How many times the content or viewport has changed size, the change
     /// the end was last put back for, and whether a put-back is queued.
     var resizes = 0
+    /// When the viewport last changed size.
+    var viewportChangedAt: CFTimeInterval = 0
     var restoredResize: Int?
     var restoreQueued = false
     /// The transcript the scroll view on screen shows; a position written
@@ -1292,9 +1302,9 @@ private struct ConversationVisualReplyCopyButton: View {
     /// A wheel or the pointer over this transcript, or a navigation key in its
     /// window while it is the active panel, within the last half second; or
     /// VoiceOver, whose scrolls come with no event the app sees.
-    static func isRecent(for scrollView: NSScrollView?, isActivePanel: Bool) -> Bool {
+    static func isRecent(for scrollView: NSScrollView?, isActivePanel: Bool, countsVoiceOver: Bool = true) -> Bool {
         guard let scrollView else { return false }
-        if NSWorkspace.shared.isVoiceOverEnabled { return true }
+        if countsVoiceOver, NSWorkspace.shared.isVoiceOverEnabled { return true }
         let now = Date()
         if now.timeIntervalSince(lastWheel) < 0.5, wheelScrollViews.contains(ObjectIdentifier(scrollView)) { return true }
         return isActivePanel && now.timeIntervalSince(lastKey) < 0.5 && keyWindow != nil && keyWindow === scrollView.window
@@ -1314,7 +1324,8 @@ private struct ConversationVisualReplyCopyButton: View {
 
     /// Watches the app's own wheel and navigation-key events while any
     /// transcript is shown. A key counts only outside text editing: a space
-    /// typed in the composer is not the reader scrolling.
+    /// typed in the composer is not the reader scrolling; one with a reply's
+    /// read-only text focused is.
     static func start() {
         users += 1
         guard monitor == nil else { return }
@@ -1327,7 +1338,7 @@ private struct ConversationVisualReplyCopyButton: View {
                 let point = content.superview?.convert(event.locationInWindow, from: nil) ?? event.locationInWindow
                 noteWheel(over: content.hitTest(point))
             } else if event.type == .keyDown, keys.contains(event.keyCode), let window = NSApp.keyWindow,
-                      !(window.firstResponder is NSText) {
+                      (window.firstResponder as? NSText)?.isEditable != true {
                 keyWindow = window
                 lastKey = Date()
             }

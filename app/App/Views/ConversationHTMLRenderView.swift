@@ -33,6 +33,8 @@ struct ConversationHTMLRenderView: View {
     /// Kept through a failure and its retry.
     @State private var caption: String?
     @State private var captionDecided = false
+    /// The page's own first report has settled the caption.
+    @State private var leadApplied = false
     @FocusState private var focusedControl: Control?
 
     private enum Control: Hashable { case zoomOut, resetZoom, zoomIn, expand }
@@ -52,10 +54,15 @@ struct ConversationHTMLRenderView: View {
     /// differ (a heading a script writes, or first text a style hides). A
     /// page that never reported keeps the source's answer.
     private func reveal(reported: Bool) {
-        guard !measured else { return }
         let shown = Self.caption(title: reference.title, opensWithTitle: VisualReply.lead(pageLead, isTitle: reference.title))
-        if !captionDecided || (reported && shown != caption) { caption = shown; captionDecided = true }
-        measured = true
+        if reported, !leadApplied {
+            // The page's first report settles the caption, even after the fallback revealed it.
+            leadApplied = true
+            if !captionDecided || shown != caption { caption = shown; captionDecided = true }
+        } else if !captionDecided {
+            caption = shown; captionDecided = true
+        }
+        if !measured { measured = true }
     }
 
     init(reference: ConversationHTMLRenderReference) {
