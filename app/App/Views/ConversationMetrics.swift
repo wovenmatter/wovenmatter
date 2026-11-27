@@ -62,6 +62,9 @@ enum ConversationMetrics {
         static let nestedListGap: CGFloat = 6
         /// Under a nested item, or a parent's text, that wraps.
         static let wrappedNestedListGap: CGFloat = 8
+        /// How far a citation line after a nested list is raised into the gap
+        /// above it, so it sits closer to what it cites than to the next item.
+        static let citationRaise: CGFloat = 3
         /// A paragraph → the list after it.
         static let paragraphToListGap: CGFloat = 10
         static let majorHeadingGap: CGFloat = 24

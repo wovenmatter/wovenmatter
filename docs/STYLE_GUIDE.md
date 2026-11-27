@@ -530,7 +530,8 @@ when an intentional design change is accepted.
   every item keeps its marker, an item's later blocks (after its
   nested list too) start at its text indent, its level's item gap below what
   precedes them (a line of only links after a nested list, a citation, sits a
-  label gap under what it cites), quoted text is a step quieter than the text around it (the
+  label gap and a little raised under what it cites, with the wrapped-item gap
+  below it), quoted text is a step quieter than the text around it (the
   step commentary takes), a task's box is one drawn square,
   filled with a check or outlined, headings attach to what follows them, and
   code, tables and quotes keep the same space on each side and start at their

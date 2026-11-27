@@ -798,7 +798,9 @@ final class ConversationResponseNativeTextView: NSTextView, NSTextViewDelegate, 
             check.lineWidth = 1.6
             check.lineCapStyle = .round
             check.lineJoinStyle = .round
-            NSColor.white.setStroke()
+            // The surface's colour: white on the dark green fill, the dark
+            // surface on the pale green fill in Dark.
+            WovenColors.background.setStroke()
             check.stroke()
         } else {
             WovenColors.foreground.withAlphaComponent(0.4).setStroke()
@@ -1285,19 +1287,37 @@ private enum ConversationResponseAttributedText {
                     // blocks take its level's one-line gap.
                     let itemGap = level == 0 ? Prose.listGap : Prose.nestedListGap
                     let underGap = !previousWraps ? itemGap : level == 0 ? Prose.wrappedListGap : Prose.wrappedNestedListGap
-                    // A citation line after an item's nested list belongs to what it cites.
+                    // A citation line after an item's nested list belongs to what it
+                    // cites: a label gap above it, its line raised a little more into
+                    // that gap (which moves what follows up with it), and the next
+                    // item the wrapped-item gap below it, once, since the item it
+                    // closes takes several lines.
+                    let citation = item.continuation && isCitationLine(item.blocks.first)
                     let gap = startsList ? ConversationMetrics.sectionGap
-                        : item.continuation && isCitationLine(item.blocks.first) ? ConversationMetrics.labelGap : underGap
+                        : citation ? ConversationMetrics.labelGap : underGap
                     let first = index == 0 ? before : max(0, gap + itemTopOverhang(item) - bottomSlack(previousItem))
                     let itemMarker = Marker(text: text, start: markerEnd - Prose.markerColumn, end: markerEnd)
                     if item.blocks.isEmpty {
                         appendInline(.init(""), font: body,
                                      style: paragraphStyle(indent: markerEnd + Prose.markerGap, before: first), marker: itemMarker)
                     }
+                    let itemStart = output.length
                     sequence(item.blocks, indent: markerEnd + Prose.markerGap, after: nil, firstBefore: first, itemGap: itemGap,
                              marker: item.continuation ? nil : itemMarker)
+                    if citation {
+                        // A line box shorter than the text's by the raise: TextKit
+                        // keeps the text's descent, so the text moves up by it.
+                        let height = NSLayoutManager().defaultLineHeight(for: body) - Prose.citationRaise
+                        output.enumerateAttribute(.paragraphStyle, in: NSRange(location: itemStart, length: output.length - itemStart)) { value, range, _ in
+                            guard let style = (value as? NSParagraphStyle)?.mutableCopy() as? NSMutableParagraphStyle else { return }
+                            style.minimumLineHeight = height
+                            style.maximumLineHeight = height
+                            output.addAttribute(.paragraphStyle, value: style, range: range)
+                        }
+                    }
                     previousItem = item.blocks.last ?? emptyParagraph
-                    previousWraps = wraps(item, textIndent: markerEnd + Prose.markerGap)
+                    // A continuation closes an item that takes several lines.
+                    previousWraps = item.continuation || wraps(item, textIndent: markerEnd + Prose.markerGap)
                 }
             case .quote(let quoted):
                 let start = output.length
