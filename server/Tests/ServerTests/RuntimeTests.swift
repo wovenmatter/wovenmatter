@@ -427,8 +427,9 @@ func aPermissionTheRuntimeTakesOnlyAtStartRestartsItWithTheNewMode() async throw
   #expect(runtime.state.withLock { $0.choices.permission } == "ask")
 }
 
-/// A finished turn of a runtime that keeps its own history asks for its
-/// usage to be read soon; one of a runtime that records its own usage does not.
+/// A turn of a runtime that keeps its own history asks, once, for its usage
+/// to be read soon when it ends, also when the session is stopped during
+/// it; one of a runtime that records its own usage does not.
 @Test(.timeLimit(.minutes(1)))
 func aHistoryRuntimesTurnAsksForItsUsageToBeRead() async throws {
   let store = FileManager.default.temporaryDirectory.appendingPathComponent("fake-acp-\(UUID().uuidString)")
@@ -443,5 +444,14 @@ func aHistoryRuntimesTurnAsksForItsUsageToBeRead() async throws {
     let session = try await client.call(CreateSession(runtime: kind, title: "Chat"))
     try await turn(client, session.id, "one")
     #expect(told.withLock { $0 } == expected)
+    guard kind == .codex else { continue }
+    // A turn stopped while it waits for an approval ends once too.
+    let subscription = try await client.subscribe(SubscribeSession(sessionID: session.id))
+    _ = try await client.call(SendTurn(sessionID: session.id, text: "needs permission"))
+    for try await event in subscription.events { if case .awaiting = event { break } }
+    _ = try await client.call(StopSession(sessionID: session.id))
+    try await client.unsubscribe(subscription.id)
+    try await Task.sleep(for: .milliseconds(200))
+    #expect(told.withLock { $0 } == 2)
   }
 }

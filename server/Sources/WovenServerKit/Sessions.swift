@@ -691,9 +691,7 @@ actor SessionHost {
         await saving { try await self.finish(.notice(Notice(kind: .interrupted, text: "Stopped by \(stopper).")),
                                              id: UUID().uuidString.lowercased()) }
       }
-      // A harness with its own history is counted from there (`UsageScanner`),
-      // which is told to read it soon.
-      if runtime.kind.usageFromHistory { historyTurns?.tell() }
+      // A harness with its own history is counted from there (`UsageScanner`).
       if let usage, !runtime.kind.usageFromHistory {
         try? await library.recordUsage(sessionID: sessionID, runtime: runtime.kind, model: usage.model ?? configuration.model ?? "",
                                        input: usage.input, output: usage.output, cacheRead: usage.cacheRead,
@@ -810,9 +808,16 @@ actor SessionHost {
   private func endTurn() async {
     clearPrompts()
     if run == .running {
+      turnEnded()
       setRun(.idle)
       try? await library.setTurnRunning(sessionID, false)
     }
+  }
+
+  /// A running turn ended, however: a harness with its own history is told
+  /// to have its usage read soon (`UsageScanner`).
+  private func turnEnded() {
+    if runtime.kind.usageFromHistory { historyTurns?.tell() }
   }
 
   /// Tells every open view the session's goal now.
@@ -844,6 +849,7 @@ actor SessionHost {
 
   private func nativeSessionGone() async throws {
     clearPrompts()
+    if run == .running { turnEnded() }
     try? await library.setTurnRunning(sessionID, false)
     try await library.markNativeSessionGone(sessionID)
     setRun(.nativeSessionGone)

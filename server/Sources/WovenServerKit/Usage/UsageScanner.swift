@@ -72,6 +72,7 @@ actor UsageScanner {
   /// pass in progress if there is one. The ten minutes count from the last
   /// pass of any kind.
   func start(every interval: Duration = .seconds(600)) {
+    guard task == nil else { return }
     task = Task { [weak self] in
       while !Task.isCancelled {
         guard let self else { return }
@@ -131,10 +132,10 @@ actor UsageScanner {
   /// chunk, or OpenCode's page. A normal stop leaves no read counted as
   /// interrupted.
   func stop() async {
-    guard let task else { return }
-    task.cancel()
-    await task.value
-    self.task = nil
+    guard let running = task else { return }
+    running.cancel()
+    await running.value
+    if task == running { task = nil }
   }
 
   private func scanAndReport() async -> Int {
