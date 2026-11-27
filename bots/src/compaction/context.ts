@@ -13,6 +13,7 @@ import {
   type Registry,
 } from "@earendil-works/pi-durable";
 import { isReasoning, type Reasoning } from "../config.ts";
+import { type ModelCallUsage, providerUsage, replyUsage } from "../usage.ts";
 import {
   applyWindow,
   compactNative,
@@ -68,6 +69,8 @@ export const NativeContextDoc = defineDoc<NativeContextState & JsonObject>({
 export type CompactionOptions = {
   /** `"off"` disables provider-native compaction; Pi Durable's summarizer then always runs. */
   readonly native?: "auto" | "off";
+  /** Given each compaction model call's usage, with the conversation it compacted. */
+  readonly onUsage?: (conversationId: number, usage: ModelCallUsage) => void;
   /** Fetch for native compaction and generation requests; tests inject a fake. */
   readonly fetch?: FetchFunction;
   readonly onReport?: (error: unknown, info: unknown) => void;
@@ -270,6 +273,7 @@ export class NativeCompaction {
       .flatMap((part) => (part.type === "text" ? [part.text] : []))
       .join("\n")
       .trim();
+    this.#options.onUsage?.(conversation.id as unknown as number, replyUsage(reply));
     if (reply.stopReason !== "stop" || !text) {
       throw new Error(`portable compaction failed: ${reply.errorMessage ?? reply.stopReason}`);
     }
@@ -334,6 +338,8 @@ export class NativeCompaction {
           signal: ctx.abortSignal,
         });
         if (!("unsupported" in outcome)) {
+          const used = providerUsage(outcome.usage, model.provider, model.id, Date.now());
+          if (used) this.#options.onUsage?.(api.conversationId as unknown as number, used);
           await this.#commit(conversation, api, compaction, saved, coveredIds, system, {
             id: `${api.taskId}`,
             route: outcome.route,

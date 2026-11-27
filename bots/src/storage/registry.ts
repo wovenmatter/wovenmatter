@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { validateSqliteSchemaPrefix } from "@earendil-works/chord/sqlite";
 import type { SqliteDatabase, SqliteExecutor } from "@earendil-works/pi-durable/storage/sqlite";
 import type { LimitEntry } from "../limits.ts";
+import type { ModelCallUsage } from "../usage.ts";
 
 import type { SidebarGroup } from "../protocol.ts";
 
@@ -25,6 +26,12 @@ export const NOTES_TABLE = "bot_notes";
 export const LIMITS_TABLE = "bot_limits";
 /** Each bot's extracted memory (one fact per line) and its extraction checkpoint. */
 export const MEMORY_TABLE = "bot_memory";
+/**
+ * Model calls made outside a conversation's own entries (titles, memory extraction, compaction),
+ * one row each, with the conversation they were for (a Forum room's, with no bot). The server
+ * counts usage from these and the entries.
+ */
+export const USAGE_TABLE = "bot_usage";
 
 /** A bot's memory: facts oldest first, and the newest entry id extraction has read. */
 export type BotMemory = {
@@ -229,10 +236,49 @@ export class BotRegistry {
         checkpoint INTEGER NOT NULL,
         updated_at TEXT NOT NULL
       ) STRICT;
+      CREATE TABLE IF NOT EXISTS ${USAGE_TABLE} (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        bot_id TEXT NOT NULL,
+        conversation_id INTEGER NOT NULL,
+        purpose TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        provider TEXT NOT NULL,
+        model TEXT NOT NULL,
+        input INTEGER NOT NULL,
+        output INTEGER NOT NULL,
+        cache_read INTEGER NOT NULL,
+        cache_write INTEGER NOT NULL,
+        cost REAL NOT NULL,
+        response_id TEXT
+      ) STRICT;
       -- At most one Admin Bot, and at most one orchestrator.
       CREATE UNIQUE INDEX IF NOT EXISTS bot_bots_one_admin ON ${BOTS_TABLE}(kind) WHERE kind = 'admin';
       CREATE UNIQUE INDEX IF NOT EXISTS bot_bots_one_orchestrator ON ${BOTS_TABLE}(is_orchestrator) WHERE is_orchestrator = 1;
     `);
+  }
+
+  /**
+   * Saves one model call made outside a conversation's entries, for `conversationId` of `botId`
+   * (`""` for a Forum room). A call that used nothing is not saved.
+   */
+  async recordUsage(botId: string, conversationId: number, purpose: string, usage: ModelCallUsage): Promise<void> {
+    if (!(usage.input || usage.output || usage.cacheRead || usage.cacheWrite || usage.cost)) return;
+    await this.#db.run(
+      `INSERT INTO ${USAGE_TABLE} (bot_id, conversation_id, purpose, created_at, provider, model, input, output,
+        cache_read, cache_write, cost, response_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      botId,
+      conversationId,
+      purpose,
+      usage.at,
+      usage.provider,
+      usage.model,
+      usage.input,
+      usage.output,
+      usage.cacheRead,
+      usage.cacheWrite,
+      usage.cost,
+      usage.responseId ?? null,
+    );
   }
 
   /** This runtime's own identifier (container and volume labels); it moves with the bots folder. */

@@ -471,6 +471,8 @@ export class ClaudeAgentStream {
         throw new ClaudeAgentError(failure ?? "Claude Code did not compact this conversation.");
       }
       message.botCompaction = { summary, preTokens: boundary.compact_metadata?.pre_tokens };
+      // The compaction's own call, which the caller saves.
+      message.usage = usageOf(replyUsage);
       return;
     }
     if (assistantError === "authentication_failed" || (failure && NOT_LOGGED_IN.test(failure))) {

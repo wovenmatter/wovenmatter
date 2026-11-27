@@ -40,7 +40,9 @@ import type { BotRecord } from "./storage/registry.ts";
 import { type SubagentLog, subagentExtension } from "./subagent.ts";
 import { type BotPlatform, botTools } from "./tools.ts";
 import { type WebToolsOptions, webTools } from "./web.ts";
+import type { ModelCallUsage } from "./usage.ts";
 import { wovenToolsSlot } from "./woven-tools.ts";
+
 
 export type CompactionConfig = RawSettings["compaction"];
 
@@ -96,6 +98,8 @@ export type BotAgentOptions = {
   readonly wovenTools?: (install: (extension: Extension) => void) => void;
   readonly onReport?: (error: unknown, info: unknown) => void;
   readonly compaction?: CompactionConfig;
+  /** Saves a model call made outside the conversation's entries (compaction), for that conversation. */
+  readonly recordUsage?: (conversationId: number, purpose: string, usage: ModelCallUsage) => void;
   /** Fetch for provider requests (native compaction and generation); tests inject a fake. */
   readonly fetch?: FetchFunction;
   /** The bot's extracted memory as prompt text (`memorySection`); undefined: none yet. */
@@ -266,6 +270,9 @@ export function createBotHarnessOptions(options: BotAgentOptions): BotHarnessOpt
   const source = options.models;
   const native = new NativeCompaction(typeof source === "function" ? source : () => source, {
     native: options.compaction?.native ?? "auto",
+    ...(options.recordUsage
+      ? { onUsage: (conversationId: number, usage: ModelCallUsage) => options.recordUsage?.(conversationId, "compaction", usage) }
+      : {}),
     ...(options.fetch ? { fetch: options.fetch } : {}),
     ...(options.onReport ? { onReport: options.onReport } : {}),
   });
