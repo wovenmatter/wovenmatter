@@ -748,10 +748,10 @@ struct CloudConversation: View {
     /// shrinking at the live edge keep the bottom through the size-change
     /// anchor in the same pass; when a resize leaves the end out of view
     /// anyway, it is put back. Keyboard, wheel and accessibility
-    /// scrolls report no scroll phase, so the view moving with nothing resized
-    /// is the reader too when it leaves the end (the app only ever moves the
-    /// view away from the end when the reader asked, which stops following
-    /// already) or arrives at it.
+    /// scrolls report no scroll phase, so the view moving right after the
+    /// reader's own input is the reader too when it leaves the end or arrives
+    /// at it; with no such input it is the layout (a resize can move the view
+    /// again a pass later), and only puts the end back.
     private func endChanged(from before: TranscriptEnd, to after: TranscriptEnd) {
         // Only what changes something visible is published.
         let obscured = ConversationEnd.isObscured(distance: after.distance)
@@ -759,18 +759,27 @@ struct CloudConversation: View {
         measured.endDistance = after.distance
         let resized = after.contentHeight != before.contentHeight || after.viewportHeight != before.viewportHeight
         if resized { measured.resizes += 1 }
-        // The view moving with no scroll phase is the reader (keyboard, wheel
-        // without phases, accessibility): when nothing resized, any move away
-        // from the end or onto it. When something resized in the same update,
-        // only a move the reader just made by wheel or key counts: one that
-        // left the end further away (keeping the bottom never does), or one
-        // that reached the end; a layout on its own never changes following.
+        // The view moving with no scroll phase is the reader only when the
+        // reader just used a wheel, a navigation key or the pointer on this
+        // transcript, or VoiceOver is on: the scroll view also moves on its
+        // own (after a window resize it can put back an offset it had before,
+        // in a pass with no size change), and a layout never changes
+        // following. With that input: when nothing resized, any move away
+        // from the end or onto it; when something resized in the same
+        // update, one that left the end further away (keeping the bottom
+        // never does), or one that reached the end.
+        let readerInput = ConversationReaderInput.isRecent(for: measured.scrollView, isActivePanel: isActivePanel)
         let movedAway = after.distance > max(before.distance, Self.liveEdgeTolerance)
         let arrived = after.distance <= Self.liveEdgeTolerance && before.distance > Self.liveEdgeTolerance
-        if !isUserScrolling, !isPrependingHistory, after.offset != before.offset,
-           resized ? ConversationReaderInput.isRecent(for: measured.scrollView, isActivePanel: isActivePanel) && (movedAway || arrived)
-                   : (after.distance > before.distance || after.distance <= Self.liveEdgeTolerance) {
+        let moved = after.offset != before.offset
+        if !isUserScrolling, !isPrependingHistory, moved, readerInput,
+           resized ? movedAway || arrived : after.distance > before.distance || after.distance <= Self.liveEdgeTolerance {
             readerMoved(to: after)
+        }
+        // The scroll view moved on its own and left the end out of view while following: put it back.
+        if !resized, moved, !readerInput, followsBottom, after.distance > 0 {
+            measured.restoredResize = nil
+            restoreEndAfterLayout()
         }
         // Back at the live edge, the bottom holds instead.
         if after.distance <= Self.liveEdgeTolerance, !isPrependingHistory, heldRowID != nil { releaseHeldRow() }
@@ -1280,10 +1289,12 @@ private struct ConversationVisualReplyCopyButton: View {
     private static var monitor: Any?
     private static var users = 0
 
-    /// A wheel over this transcript, or a navigation key in its window while
-    /// it is the active panel, within the last half second.
+    /// A wheel or the pointer over this transcript, or a navigation key in its
+    /// window while it is the active panel, within the last half second; or
+    /// VoiceOver, whose scrolls come with no event the app sees.
     static func isRecent(for scrollView: NSScrollView?, isActivePanel: Bool) -> Bool {
         guard let scrollView else { return false }
+        if NSWorkspace.shared.isVoiceOverEnabled { return true }
         let now = Date()
         if now.timeIntervalSince(lastWheel) < 0.5, wheelScrollViews.contains(ObjectIdentifier(scrollView)) { return true }
         return isActivePanel && now.timeIntervalSince(lastKey) < 0.5 && keyWindow != nil && keyWindow === scrollView.window
@@ -1308,8 +1319,10 @@ private struct ConversationVisualReplyCopyButton: View {
         users += 1
         guard monitor == nil else { return }
         let keys: Set<UInt16> = [115, 116, 119, 121, 125, 126, 49]   // home, page up, end, page down, down, up, space
-        monitor = NSEvent.addLocalMonitorForEvents(matching: [.scrollWheel, .keyDown]) { event in
-            if event.type == .scrollWheel, let content = event.window?.contentView {
+        monitor = NSEvent.addLocalMonitorForEvents(matching: [.scrollWheel, .keyDown, .leftMouseDown, .leftMouseDragged]) { event in
+            // A drag on the scroller, or one selecting text past the edge, scrolls
+            // too; one resizing the window does not.
+            if event.type != .keyDown, let content = event.window?.contentView, event.window?.inLiveResize != true {
                 // `hitTest` takes a point in the receiver's superview's coordinates.
                 let point = content.superview?.convert(event.locationInWindow, from: nil) ?? event.locationInWindow
                 noteWheel(over: content.hitTest(point))

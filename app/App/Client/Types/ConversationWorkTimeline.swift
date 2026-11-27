@@ -881,6 +881,11 @@ public extension AgentRunActivity {
     return label.contains(" ") && line.hasPrefix(label) ? command : nil
   }
 
+  /// The row's label is the command line itself, not words about a step.
+  var workTimelineLabelIsCommand: Bool {
+    kind == .tool && ConversationToolAction(self) == .command && workTimelineTitledCommand.map { $0.workTimelineScript == nil } == true
+  }
+
   /// A harness's own helper, named for what it does rather than by its
   /// identifier: Claude Code's ToolSearch looks up the tools it may call,
   /// and its Skill tool loads a skill. Any other tool keeps its own name.

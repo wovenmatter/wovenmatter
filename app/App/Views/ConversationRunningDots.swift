@@ -34,7 +34,7 @@ private final class RunningDotsView: NSView {
     static let gap: CGFloat = 3
     static let width = diameter * 3 + gap * 2
     private static let step: CFTimeInterval = 0.4
-    private static let faint: Float = 0.25
+    private static let faint: Float = 0.4
     private static let animationKey = "step"
 
     private let dots = (0..<3).map { _ in CALayer() }

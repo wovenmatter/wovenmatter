@@ -490,17 +490,21 @@ private struct ConversationElapsedButtonStyle: ButtonStyle {
     @State private var hovered = false
 
     /// Around the label the click target reaches a row gap either side and
-    /// stands at least 26 points tall, without moving the label or anything
+    /// `verticalReach` above and below, without moving the label or anything
     /// around it.
-    private static let reach = (horizontal: ConversationMetrics.rowGap, vertical: CGFloat(6))
+    private static let horizontalReach = ConversationMetrics.rowGap
+    var verticalReach: CGFloat = 6
+    /// A work row's reach: half the gap between two rows, so two rows'
+    /// targets meet in the gap and never overlap.
+    static let rowReach = ConversationMetrics.rowGap / 2
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .padding(.horizontal, Self.reach.horizontal)
-            .padding(.vertical, Self.reach.vertical)
+            .padding(.horizontal, Self.horizontalReach)
+            .padding(.vertical, verticalReach)
             .contentShape(Rectangle())
-            .padding(.horizontal, -Self.reach.horizontal)
-            .padding(.vertical, -Self.reach.vertical)
+            .padding(.horizontal, -Self.horizontalReach)
+            .padding(.vertical, -verticalReach)
             .background {
                 RoundedRectangle(cornerRadius: 4, style: .continuous)
                     .fill(isEnabled && (configuration.isPressed || hovered)
@@ -863,7 +867,7 @@ private struct ConversationWorkGroupRow: View {
                     .foregroundStyle(WovenPalette.foreground.opacity(runStatus == .running && group.hasActiveActivity ? 0.85 : 0.72))
                     .contentShape(Rectangle())
                 }
-                .buttonStyle(ConversationElapsedButtonStyle())
+                .buttonStyle(ConversationElapsedButtonStyle(verticalReach: ConversationElapsedButtonStyle.rowReach))
                 .accessibilityValue(expanded.wrappedValue ? "Expanded" : "Collapsed")
                 .accessibilityIdentifier("work-group:" + group.id)
                 if expanded.wrappedValue {
@@ -1064,7 +1068,8 @@ private struct ConversationActivityRow: View {
                     } label: {
                         activityLabel(expanded: expanded.wrappedValue)
                     }
-                    .buttonStyle(.plain)
+                    // The same click target as a group's row.
+                    .buttonStyle(ConversationElapsedButtonStyle(verticalReach: ConversationElapsedButtonStyle.rowReach))
                     .accessibilityValue((expanded.wrappedValue ? "Expanded" : "Collapsed") + (isLive && !isFailure ? ", In progress" : ""))
                     .accessibilityIdentifier("work-activity:" + activity.id)
                     if expanded.wrappedValue {
@@ -1103,12 +1108,21 @@ private struct ConversationActivityRow: View {
                     // One line across the row, cut at its end, with the chevron
                     // right after it; the full text is in the details.
                     HStack(alignment: .firstTextBaseline, spacing: ConversationMetrics.labelGap) {
-                        // A step stronger while its call runs; the same width either way.
-                        Text(primaryLabel)
-                            .font(.system(size: 13.5, weight: .medium))
-                            .foregroundStyle(WovenPalette.foreground.opacity(isLive && !isFailure ? 0.85 : 0.72))
-                            .lineLimit(1)
-                            .truncationMode(.tail)
+                        // A step stronger while its call runs, at one weight, so
+                        // the same width either way; the command itself in the
+                        // code font, on the line a label's baseline sets, so
+                        // the row keeps a label's height.
+                        HStack(alignment: .firstTextBaseline, spacing: 0) {
+                            if activity.workTimelineLabelIsCommand {
+                                Text("X").font(.system(size: 13.5)).fixedSize().frame(width: 0, alignment: .leading).hidden()
+                                    .accessibilityHidden(true)
+                            }
+                            Text(primaryLabel)
+                                .font(activity.workTimelineLabelIsCommand ? .system(size: 12.5, design: .monospaced) : .system(size: 13.5))
+                                .lineLimit(1)
+                                .truncationMode(.tail)
+                        }
+                        .foregroundStyle(WovenPalette.foreground.opacity(isLive && !isFailure ? 0.85 : 0.72))
                         if let expanded { chevron(expanded).layoutPriority(1) }
                     }
                     if let secondaryLabel {
