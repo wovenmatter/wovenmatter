@@ -46,7 +46,6 @@ struct BotConversationSurface: View {
     let headerInsets: BotHeaderInsets
     let focusGeneration: Int?
     let startsComposerCollapsed: Bool
-    let usesCompactSpacing: Bool
     let showsClosePanel: Bool
     let showsAddPanel: Bool
     let onActivate: () -> Void
@@ -95,7 +94,6 @@ struct BotConversationSurface: View {
                     headerInsets: headerInsets,
                     focusGeneration: focusGeneration,
                     startsComposerCollapsed: startsComposerCollapsed,
-                    usesCompactSpacing: usesCompactSpacing,
                     showsClosePanel: showsClosePanel,
                     showsAddPanel: showsAddPanel,
                     onActivate: onActivate,
@@ -124,7 +122,6 @@ struct BotConversationSurface: View {
                 headerInsets: headerInsets,
                 focusGeneration: focusGeneration,
                 startsComposerCollapsed: startsComposerCollapsed,
-                usesCompactSpacing: usesCompactSpacing,
                 showsClosePanel: showsClosePanel,
                 showsAddPanel: showsAddPanel,
                 onActivate: onActivate,
@@ -216,7 +213,6 @@ private struct BotConversationWorkspace: View {
     let headerInsets: BotHeaderInsets
     let focusGeneration: Int?
     let startsComposerCollapsed: Bool
-    let usesCompactSpacing: Bool
     let showsClosePanel: Bool
     let showsAddPanel: Bool
     let onActivate: () -> Void
@@ -233,7 +229,7 @@ private struct BotConversationWorkspace: View {
             HStack(spacing: 0) {
                 if split {
                     pane(conversationID: nil, insets: BotHeaderInsets(left: headerInsets.left, right: 0),
-                         showsClose: showsClosePanel, showsAdd: false, compact: true)
+                         showsClose: showsClosePanel, showsAdd: false)
                     BotThreadResizer(threadWidth: $threadWidth, available: geometry.size.width)
                     threadPane(wide: wide, split: true, insets: BotHeaderInsets(left: 0, right: headerInsets.right), showsClose: false, showsAdd: showsAddPanel)
                         .frame(width: BotThreadSplit.clamped(threadWidth, available: geometry.size.width))
@@ -247,7 +243,7 @@ private struct BotConversationWorkspace: View {
     }
 
     private func pane(conversationID: Int?, insets: BotHeaderInsets, showsClose: Bool, showsAdd: Bool,
-                      compact: Bool = false, actions: [BotPaneAction] = []) -> some View {
+                      actions: [BotPaneAction] = []) -> some View {
         BotConversationPane(
             bots: bots,
             bot: bot,
@@ -257,7 +253,6 @@ private struct BotConversationWorkspace: View {
             headerActions: actions,
             focusGeneration: focusGeneration,
             startsComposerCollapsed: startsComposerCollapsed,
-            usesCompactSpacing: usesCompactSpacing || compact,
             showsClosePanel: showsClose,
             showsAddPanel: showsAdd,
             onActivate: onActivate,
@@ -281,7 +276,7 @@ private struct BotConversationWorkspace: View {
         actions.append(BotPaneAction(glyph: .close, title: "Back to Main") {
             onRoute(BotTarget(machineID: target.machineID, botID: bot.id))
         })
-        return pane(conversationID: conversationID, insets: insets, showsClose: showsClose, showsAdd: showsAdd, compact: split, actions: actions)
+        return pane(conversationID: conversationID, insets: insets, showsClose: showsClose, showsAdd: showsAdd, actions: actions)
     }
 }
 
@@ -311,7 +306,6 @@ private struct BotConversationPane: View {
     let headerActions: [BotPaneAction]
     let focusGeneration: Int?
     let startsComposerCollapsed: Bool
-    let usesCompactSpacing: Bool
     let showsClosePanel: Bool
     let showsAddPanel: Bool
     let onActivate: () -> Void
@@ -576,37 +570,21 @@ private struct BotConversationPane: View {
             if let error = controller.error, error != entries.last?.error {
                 BotDismissibleError(text: error) { controller.error = nil }
                     .frame(maxWidth: ConversationMetrics.column)
-                    .padding(.horizontal, showsClosePanel || showsAddPanel ? PanelControlButton.size + 8 : 0)
             }
-            HStack(alignment: .bottom, spacing: 8) {
-                Group {
-                    if showsClosePanel {
-                        PanelControlButton(glyph: .panelRightOpen, accessibilityLabel: "Remove panel", help: "Remove panel", action: onClosePanel)
-                    } else if showsAddPanel {
-                        Color.clear
-                            .frame(width: PanelControlButton.size, height: PanelControlButton.size)
-                            .allowsHitTesting(false)
-                            .accessibilityHidden(true)
-                    }
-                }
-                .padding(.bottom, ConversationComposer.verticalPadding)
-                composer
-                    .frame(maxWidth: ConversationMetrics.column)
-                Group {
-                    if showsAddPanel {
-                        PanelControlButton(glyph: .panelLeftOpen, accessibilityLabel: "Add panel", help: "Add panel", action: onAddPanel)
-                    } else if showsClosePanel {
-                        Color.clear
-                            .frame(width: PanelControlButton.size, height: PanelControlButton.size)
-                            .allowsHitTesting(false)
-                            .accessibilityHidden(true)
-                    }
-                }
-                .padding(.bottom, ConversationComposer.verticalPadding)
-            }
+            composer
+                .frame(maxWidth: ConversationMetrics.column)
         }
         .frame(maxWidth: .infinity)
-        .padding(.horizontal, usesCompactSpacing ? 12 : 32)
+        .padding(.horizontal, ConversationMetrics.sideInset)
+        .conversationPanelControls {
+            if showsClosePanel {
+                PanelControlButton(glyph: .panelRightOpen, accessibilityLabel: "Remove panel", help: "Remove panel", action: onClosePanel)
+            }
+        } trailing: {
+            if showsAddPanel {
+                PanelControlButton(glyph: .panelLeftOpen, accessibilityLabel: "Add panel", help: "Add panel", action: onAddPanel)
+            }
+        }
         .padding(.top, 8)
         .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { bottomStackHeight = max(0, $0) }
         .padding(.bottom, ConversationBottomOverlayLayout.bottomOffset)

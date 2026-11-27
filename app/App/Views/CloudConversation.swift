@@ -21,7 +21,6 @@ struct CloudConversation: View {
     let attachments: [AgentMessageAttachmentDraft]
     let sendInProgress: Bool
     let startsComposerCollapsed: Bool
-    let usesCompactPanelSpacing: Bool
     let showsClosePanel: Bool
     let showsAddPanel: Bool
     let focusRequestGeneration: Int?
@@ -326,7 +325,8 @@ struct CloudConversation: View {
 
             bottomStack
                 .frame(maxWidth: .infinity)
-                .padding(.horizontal, usesCompactPanelSpacing ? 12 : 32)
+                .padding(.horizontal, ConversationMetrics.sideInset)
+                .conversationPanelControls { leadingPanelControl } trailing: { trailingPanelControl }
                 .padding(.top, 8)
                 .onGeometryChange(for: CGFloat.self) { geometry in
                     geometry.size.height
@@ -399,22 +399,13 @@ struct CloudConversation: View {
                 .conversationCoverSnapshot()
                 .id(interaction.id)
             }
-            // Side buttons sit on the composer's bottom control row; the
-            // composer grows upward with its draft and Tasks badge.
-            HStack(alignment: .bottom, spacing: 8) {
-                leadingPanelControl
-                    .padding(.bottom, ConversationComposer.verticalPadding)
-                VStack(spacing: 8) {
-                    notices
-                    composer
-                }
-                // The transcript's column, so the composer and the messages share edges.
-                .frame(maxWidth: ConversationMetrics.column)
-                trailingPanelControl
-                    .padding(.bottom, ConversationComposer.verticalPadding)
+            // The transcript's column, so the composer and the messages share
+            // edges; the panel buttons sit in the margins beside it.
+            VStack(spacing: 8) {
+                notices
+                composer
             }
-            // Animate the whole row so the outside buttons follow the
-            // composer height in the same layout transaction.
+            .frame(maxWidth: ConversationMetrics.column)
             .animation(
                 reduceMotion ? nil : .easeOut(duration: 0.15),
                 value: composerCollapseOverride ?? startsComposerCollapsed
@@ -431,11 +422,6 @@ struct CloudConversation: View {
                 help: "Remove panel",
                 action: onClosePanel
             )
-        } else if showsAddPanel {
-            Color.clear
-                .frame(width: PanelControlButton.size, height: PanelControlButton.size)
-                .allowsHitTesting(false)
-                .accessibilityHidden(true)
         }
     }
 
@@ -448,11 +434,6 @@ struct CloudConversation: View {
                 help: "Add panel",
                 action: onAddPanel
             )
-        } else if showsClosePanel {
-            Color.clear
-                .frame(width: PanelControlButton.size, height: PanelControlButton.size)
-                .allowsHitTesting(false)
-                .accessibilityHidden(true)
         }
     }
 

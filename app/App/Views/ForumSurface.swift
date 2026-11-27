@@ -11,7 +11,6 @@ struct ForumWorkspace: View {
     let headerInsets: BotHeaderInsets
     let focusGeneration: Int?
     let startsComposerCollapsed: Bool
-    let usesCompactSpacing: Bool
     let showsClosePanel: Bool
     let showsAddPanel: Bool
     let onActivate: () -> Void
@@ -28,7 +27,7 @@ struct ForumWorkspace: View {
             HStack(spacing: 0) {
                 if split {
                     pane(roomID: nil, insets: BotHeaderInsets(left: headerInsets.left, right: 0),
-                         showsClose: showsClosePanel, showsAdd: false, compact: true)
+                         showsClose: showsClosePanel, showsAdd: false)
                     BotThreadResizer(threadWidth: $threadWidth, available: geometry.size.width)
                     threadPane(wide: wide, split: true, insets: BotHeaderInsets(left: 0, right: headerInsets.right), showsClose: false, showsAdd: showsAddPanel)
                         .frame(width: BotThreadSplit.clamped(threadWidth, available: geometry.size.width))
@@ -42,7 +41,7 @@ struct ForumWorkspace: View {
     }
 
     private func pane(roomID: Int?, insets: BotHeaderInsets, showsClose: Bool, showsAdd: Bool,
-                      compact: Bool = false, showsPause: Bool = true, actions: [BotPaneAction] = []) -> some View {
+                      showsPause: Bool = true, actions: [BotPaneAction] = []) -> some View {
         ForumPane(
             bots: bots,
             controller: bots.forumRoom(roomID: roomID),
@@ -52,7 +51,6 @@ struct ForumWorkspace: View {
             showsPausedBanner: showsPause,
             focusGeneration: focusGeneration,
             startsComposerCollapsed: startsComposerCollapsed,
-            usesCompactSpacing: usesCompactSpacing || compact,
             showsClosePanel: showsClose,
             showsAddPanel: showsAdd,
             onActivate: onActivate,
@@ -77,7 +75,7 @@ struct ForumWorkspace: View {
             onRoute(.forum(machineID: target.machineID))
         })
         // Beside the Forum, the Forum's own pane already says it is paused.
-        return pane(roomID: roomID, insets: insets, showsClose: showsClose, showsAdd: showsAdd, compact: split,
+        return pane(roomID: roomID, insets: insets, showsClose: showsClose, showsAdd: showsAdd,
                     showsPause: !split, actions: actions)
     }
 }
@@ -95,7 +93,6 @@ private struct ForumPane: View {
     let showsPausedBanner: Bool
     let focusGeneration: Int?
     let startsComposerCollapsed: Bool
-    let usesCompactSpacing: Bool
     let showsClosePanel: Bool
     let showsAddPanel: Bool
     let onActivate: () -> Void
@@ -419,40 +416,24 @@ private struct ForumPane: View {
             if let error = controller.error {
                 BotDismissibleError(text: error) { controller.error = nil }
                     .frame(maxWidth: ConversationMetrics.column)
-                    .padding(.horizontal, showsClosePanel || showsAddPanel ? PanelControlButton.size + 8 : 0)
             }
-            HStack(alignment: .bottom, spacing: 8) {
-                Group {
-                    if showsClosePanel {
-                        PanelControlButton(glyph: .panelRightOpen, accessibilityLabel: "Remove panel", help: "Remove panel", action: onClosePanel)
-                    } else if showsAddPanel {
-                        Color.clear
-                            .frame(width: PanelControlButton.size, height: PanelControlButton.size)
-                            .allowsHitTesting(false)
-                            .accessibilityHidden(true)
-                    }
-                }
-                .padding(.bottom, ConversationComposer.verticalPadding)
-                VStack(alignment: .leading, spacing: 6) {
-                    if let note = draftMentions.note { ForumMentionNote(text: note) }
-                    composer
-                }
-                .frame(maxWidth: ConversationMetrics.column)
-                Group {
-                    if showsAddPanel {
-                        PanelControlButton(glyph: .panelLeftOpen, accessibilityLabel: "Add panel", help: "Add panel", action: onAddPanel)
-                    } else if showsClosePanel {
-                        Color.clear
-                            .frame(width: PanelControlButton.size, height: PanelControlButton.size)
-                            .allowsHitTesting(false)
-                            .accessibilityHidden(true)
-                    }
-                }
-                .padding(.bottom, ConversationComposer.verticalPadding)
+            VStack(alignment: .leading, spacing: 6) {
+                if let note = draftMentions.note { ForumMentionNote(text: note) }
+                composer
             }
+            .frame(maxWidth: ConversationMetrics.column)
         }
         .frame(maxWidth: .infinity)
-        .padding(.horizontal, usesCompactSpacing ? 12 : 32)
+        .padding(.horizontal, ConversationMetrics.sideInset)
+        .conversationPanelControls {
+            if showsClosePanel {
+                PanelControlButton(glyph: .panelRightOpen, accessibilityLabel: "Remove panel", help: "Remove panel", action: onClosePanel)
+            }
+        } trailing: {
+            if showsAddPanel {
+                PanelControlButton(glyph: .panelLeftOpen, accessibilityLabel: "Add panel", help: "Add panel", action: onAddPanel)
+            }
+        }
         .padding(.top, 8)
         .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { bottomStackHeight = max(0, $0) }
         .padding(.bottom, ConversationBottomOverlayLayout.bottomOffset)

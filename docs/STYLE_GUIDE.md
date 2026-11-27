@@ -557,7 +557,10 @@ when an intentional design change is accepted.
   down behind the glass composer, which shows them through it. At the ends of a
   chat the first row clears the floating buttons and the last rests above the
   composer. The button back to the latest reply or post is a small round one
-  centred above the composer, on its own background.
+  centred above the composer, on its own background. The composer is exactly
+  as wide as the messages' column in every chat, bot chat and the Forum; the
+  panel buttons sit centred in the margins beside it, on its bottom row, and
+  the rightmost floating header button sits directly above the right one.
 - **Scrolling:** hide scrollbars throughout the app while preserving scrolling. Set
   `.scrollIndicators(.never)` on SwiftUI scroll views and editors, including
   sheets and popovers. Disable both scrollers on AppKit `NSScrollView` editors.

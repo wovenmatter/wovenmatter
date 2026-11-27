@@ -148,6 +148,23 @@ struct ConversationTextButton: View {
 }
 
 extension View {
+    /// The panel buttons of a composer row, each centred in the margin beside
+    /// the transcript's column (the composer is as wide as the column), on the
+    /// composer's bottom control row. Applied to the row at the panel's full
+    /// width.
+    func conversationPanelControls<Leading: View, Trailing: View>(
+        @ViewBuilder leading: () -> Leading, @ViewBuilder trailing: () -> Trailing
+    ) -> some View {
+        let inset = (ConversationMetrics.sideInset - PanelControlButton.size) / 2
+        return self
+            .overlay(alignment: .bottomLeading) {
+                leading().padding(.leading, inset).padding(.bottom, ConversationComposer.verticalPadding)
+            }
+            .overlay(alignment: .bottomTrailing) {
+                trailing().padding(.trailing, inset).padding(.bottom, ConversationComposer.verticalPadding)
+            }
+    }
+
     /// The edges of a transcript, the same in agent chats, bot chats and the
     /// Forum. It uses the panel's whole height: rows scroll up to the top edge,
     /// fading out over its last `labelGap`, and down behind the glass composer

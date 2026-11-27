@@ -688,7 +688,11 @@ struct WorkspaceView: View {
                         action: onRightRail)
                 }
             }
-            .padding(.horizontal, WovenMetrics.floatingControlInset)
+            .padding(.leading, WovenMetrics.floatingControlInset)
+            // The rightmost button is centred in the chat's right margin, over
+            // the panel button beside the composer.
+            .padding(.trailing, presentsAssets ? WovenMetrics.floatingControlInset
+                : (ConversationMetrics.sideInset - (showRightRailButton ? WovenMetrics.floatingControlSize : 32)) / 2)
             .padding(.vertical, presentsAssets ? WovenMetrics.assetToolbarVerticalPadding : WovenMetrics.floatingControlInset)
 
             if let notice {
@@ -1460,7 +1464,6 @@ struct WorkspaceSurface: View {
                 headerInsets: botHeaderInsets(for: panelID),
                 focusGeneration: chatPanels.focusRequest?.panelID == panelID ? chatPanels.focusRequest?.generation : nil,
                 startsComposerCollapsed: panelID != .primary,
-                usesCompactSpacing: chatPanels.hasAuxiliaryPanels,
                 showsClosePanel: chatPanels.canClosePanel(panelID),
                 showsAddPanel: chatPanels.canAddPanel(from: panelID),
                 onActivate: { onActivatePanel(panelID) },
@@ -1523,7 +1526,6 @@ struct WorkspaceSurface: View {
                     submittingConversationIDs.contains($0.id)
                 } ?? false,
                 startsComposerCollapsed: panelID != .primary,
-                usesCompactPanelSpacing: chatPanels.hasAuxiliaryPanels,
                 showsClosePanel: chatPanels.canClosePanel(panelID),
                 showsAddPanel: chatPanels.canAddPanel(from: panelID),
                 focusRequestGeneration: chatPanels.focusRequest?.panelID == panelID
