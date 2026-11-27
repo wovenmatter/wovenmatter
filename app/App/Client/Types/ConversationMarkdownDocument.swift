@@ -207,7 +207,13 @@ struct ConversationMarkdownDocument: Sendable {
                 if characters[search] == "`" {
                     var other = 0
                     while search + other < characters.count, characters[search + other] == "`" { other += 1 }
-                    if other == run { index = search + other; continue scan }
+                    if other == run {
+                        // A boundary where the span was, so the delimiters on
+                        // either side of it never join (`*` and `*` into `**`).
+                        outside.append("\u{1}")
+                        index = search + other
+                        continue scan
+                    }
                     search += other
                 } else {
                     search += 1

@@ -1307,8 +1307,10 @@ private enum ConversationResponseAttributedText {
                     if citation {
                         // A line box shorter than the text's by the raise: TextKit
                         // keeps the text's descent, so the text moves up by it.
+                        // The citation's own line only: blocks after it keep their styles.
                         let height = NSLayoutManager().defaultLineHeight(for: body) - Prose.citationRaise
-                        output.enumerateAttribute(.paragraphStyle, in: NSRange(location: itemStart, length: output.length - itemStart)) { value, range, _ in
+                        let line = (output.string as NSString).paragraphRange(for: NSRange(location: itemStart, length: 0))
+                        output.enumerateAttribute(.paragraphStyle, in: line) { value, range, _ in
                             guard let style = (value as? NSParagraphStyle)?.mutableCopy() as? NSMutableParagraphStyle else { return }
                             style.minimumLineHeight = height
                             style.maximumLineHeight = height
