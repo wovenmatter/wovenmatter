@@ -20,9 +20,9 @@ struct DictationMicrophone: View {
             else { dictation.toggle(editor: editor) }
         } label: {
             if usesNoteToolbarStyle {
-                microphoneIcon.font(.system(size: 14)).frame(width: 32, height: 32)
+                noteMicrophoneIcon.font(.system(size: 14)).frame(width: 32, height: 32)
             } else {
-                microphoneIcon.font(.system(size: 16)).frame(width: 36, height: 36)
+                composerMicrophoneIcon.frame(width: 36, height: 36)
                     .contentShape(Circle())
             }
         }
@@ -31,10 +31,20 @@ struct DictationMicrophone: View {
         .help(dictation.retainedTranscript != nil ? "Insert retained dictation here" : dictation.isRecording ? "Stop recording and insert here" : "Dictate on this Mac")
     }
 
-    private var microphoneIcon: some View {
+    private var noteMicrophoneIcon: some View {
         Image(systemName: dictation.isRecording ? "stop.circle.fill" : "mic")
-            .foregroundStyle(dictation.isRecording ? WovenPalette.danger
-                             : usesNoteToolbarStyle ? WovenPalette.mutedForeground : WovenPalette.foreground)
+            .foregroundStyle(dictation.isRecording ? WovenPalette.danger : WovenPalette.mutedForeground)
+    }
+
+    /// The composer's button style colors the idle microphone and its hover,
+    /// like the controls beside it.
+    @ViewBuilder private var composerMicrophoneIcon: some View {
+        if dictation.isRecording {
+            Image(systemName: "stop.circle.fill").font(.system(size: 16))
+                .foregroundStyle(WovenPalette.danger)
+        } else {
+            LucideIcon(glyph: .mic, size: 16)
+        }
     }
 }
 
