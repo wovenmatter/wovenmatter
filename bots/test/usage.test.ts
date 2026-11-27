@@ -86,6 +86,36 @@ describe("usage outside a conversation", () => {
     expect(used).toEqual([{ input_tokens: 50, output_tokens: 4 }]);
   });
 
+  it("gives up on a Codex compaction that sent an unusable item and never ends, closing its stream", async () => {
+    const used: unknown[] = [];
+    let closed = false;
+    const frames = [
+      { type: "response.created", response: { id: "r", usage: null } },
+      { type: "response.output_item.done", item: { type: "compaction", encrypted_content: "" } },
+    ];
+    const fetch = async (_url: string, init: RequestInit) => {
+      const encoder = new TextEncoder();
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          for (const frame of frames) controller.enqueue(encoder.encode(`data: ${JSON.stringify(frame)}\n\n`));
+          init.signal?.addEventListener("abort", () => {
+            closed = true;
+            controller.error(init.signal?.reason);
+          });
+        },
+      });
+      return new Response(body, { headers: { "content-type": "text/event-stream" } });
+    };
+    const route = { provider: "openai-codex", modelId: "g", api: "openai-codex-responses", strategy: "codex", endpoint: "https://codex.invalid/responses" };
+    const captured = { url: route.endpoint, headers: new Headers(), payload: { model: "g", input: [] } };
+    const request = { models: {} as Models, model: {} as Model<Api>, messages: [], onUsage: (usage: unknown) => used.push(usage) };
+    const started = Date.now();
+    await expect(codexCompact(route as never, captured, request, fetch as never, 50)).rejects.toThrow(/no content/);
+    expect(Date.now() - started).toBeLessThan(5_000);
+    expect(closed).toBe(true);
+    expect(used).toEqual([]);
+  });
+
   it("keeps a Claude reply's usage when a stop lands after its frame", async () => {
     const dir = await tempDir();
     try {

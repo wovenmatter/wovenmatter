@@ -872,7 +872,7 @@ actor UsageScanner {
 
   /// Reads the stores of `kind` to their end at once, outside the passes,
   /// by `deadline` when one is given: the bots' before a bot is purged or
-  /// the bots move. Returns whether each was read without failing.
+  /// the bots move. Returns whether each was read to its end.
   @discardableResult
   func readStores(_ kind: PiStoreKind, deadline: Duration? = nil) async -> Bool {
     var pass = Pass()
@@ -883,8 +883,11 @@ actor UsageScanner {
       let (size, modified) = Self.storeStat(path)
       let source = Self.storeSource(kind, store.url)
       do {
-        _ = try await readStore(path, source: source, kind: kind, size: size, modified: modified,
-                                known: try await library.usageSources()[source], deadline: deadline, failing: true, into: &pass)
+        // A read stopped before the store's end has not read it.
+        if try await !readStore(path, source: source, kind: kind, size: size, modified: modified,
+                                known: try await library.usageSources()[source], deadline: deadline, failing: true, into: &pass) {
+          succeeded = false
+        }
       } catch {
         succeeded = false
       }

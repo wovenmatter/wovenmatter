@@ -292,3 +292,25 @@ private func botUsage(_ database: DatabaseFile, bot: String, conversation: Int, 
   }
   #expect(added == 31 && found == added)
 }
+
+/// A read of the bots' store before a purge counts as done only when it
+/// reached the store's end: one stopped by its deadline or cancelled did not.
+@Test func aStoreReadStoppedShortIsNotDone() async throws {
+  let url = try temporary("bots-data").appendingPathComponent("bots/bots.sqlite")
+  let database = try botsStore(url)
+  let at = Int64(1_767_610_800_000)
+  _ = try database.execute("INSERT INTO bot_b1_entries VALUES "
+    + (10..<40).map { assistant($0, at: at, input: 1, output: 1) }.joined(separator: ", ") + ";")
+  let library = try await Library.open(folder: try temporary("usage-library"), machineName: "a")
+  let ticks = Mutex(0)
+  let scanner = UsageScanner(library: library, home: try temporary("usage-home"), stores: [(.bots, url)], storePage: 4,
+                             clock: { ticks.withLock { $0 += 1; return .seconds($0) } })
+  #expect(await scanner.readStores(.bots, deadline: .zero) == false)
+  let cancelled = Task { () -> Bool in
+    withUnsafeCurrentTask { $0?.cancel() }
+    return await scanner.readStores(.bots)
+  }
+  #expect(await cancelled.value == false)
+  #expect(await scanner.readStores(.bots) == true)
+  #expect(try await totals(library).totals.requests == 30)
+}
