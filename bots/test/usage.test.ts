@@ -1,7 +1,7 @@
 import { join } from "node:path";
 import { createModels } from "@earendil-works/pi-ai/models";
 import { fauxAssistantMessage, fauxProvider, fauxText } from "@earendil-works/pi-ai/providers/faux";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { openSharedDatabase } from "../src/storage/database.ts";
 import { BotRegistry, USAGE_TABLE } from "../src/storage/registry.ts";
 import { TitleGenerator } from "../src/titles.ts";
@@ -11,7 +11,8 @@ import type { ClaudeSdkQuery } from "../src/claude/runtime.ts";
 import { CLAUDE_AGENT_API, codexCompact, compactNative } from "../src/compaction/native.ts";
 import { NATIVE_KEY } from "../src/host/credentials.ts";
 import { providerUsage, replyUsage } from "../src/usage.ts";
-import { FAUX_MODEL, tempDir } from "./helpers.ts";
+import { echoModels, FAUX_MODEL, tempDir } from "./helpers.ts";
+import { startTestRuntime } from "./runtime.ts";
 
 describe("usage outside a conversation", () => {
   it("saves a title call's usage once, with its conversation, and nothing for a call that used nothing", async () => {
@@ -106,6 +107,38 @@ describe("usage outside a conversation", () => {
       expect(reply.stopReason).toBe("aborted");
       expect(reply.usage).toMatchObject({ input: 7, output: 2 });
     } finally {
+      await dir.cleanup();
+    }
+  });
+
+  it("waits for a Forum thread title's usage, as for every other call's, before the store closes", async () => {
+    const dir = await tempDir();
+    const recorded = new Set<BotRegistry>();
+    const drained = new Set<BotRegistry>();
+    const record = BotRegistry.prototype.recordUsage;
+    const saved = BotRegistry.prototype.usageSaved;
+    const recording = vi.spyOn(BotRegistry.prototype, "recordUsage").mockImplementation(function (this: BotRegistry, ...args) {
+      recorded.add(this);
+      return record.apply(this, args);
+    });
+    const draining = vi.spyOn(BotRegistry.prototype, "usageSaved").mockImplementation(function (this: BotRegistry) {
+      drained.add(this);
+      return saved.apply(this);
+    });
+    try {
+      const app = await startTestRuntime(dir.path, { models: echoModels().models });
+      const root = await app.forum.postAsUser({ text: "a topic" });
+      const thread = await app.forum.createThread(root.id);
+      await app.forum.postAsUser({ roomId: thread.roomId, text: "Plan the move" });
+      for (let tries = 0; !recorded.size; tries += 1) {
+        if (tries > 300) throw new Error("The thread was never titled");
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      await app.close();
+      expect([...recorded].every((registry) => drained.has(registry))).toBe(true);
+    } finally {
+      recording.mockRestore();
+      draining.mockRestore();
       await dir.cleanup();
     }
   });
