@@ -76,7 +76,7 @@ public final class WovenServer: Sendable {
   var toolKeysForTests: ToolKeys { endpoint.keys }
   /// This machine's permanent identifier.
   public var machineID: String { library.machineID }
-  private let sessions: SessionManager
+  let sessions: SessionManager
   private let peers: PeerSync
   private let secrets: Secrets
   private let github: GitHub
@@ -154,6 +154,7 @@ public final class WovenServer: Sendable {
                           dataFolder: options.dataFolder, instance: options.instance, install: install)
     let keepAwake = KeepAwake(library: library)
     let usage = options.harnessHome.map { UsageScanner(library: library, home: $0, environment: ProcessInfo.processInfo.environment) }
+    if let usage { sessions.historyTurns.set { Task { await usage.nudge() } } }
     let analytics = Analytics(library: library,
                               delivery: options.analyticsDelivery ?? (options.sendsAnalytics ? PostHogDelivery() : nil),
                               appVersion: options.appVersion, settled: { await peers.firstRoundDone })

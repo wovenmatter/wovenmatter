@@ -8,8 +8,9 @@ import Musl
 #endif
 
 /// Reads the harness histories of this machine's account into the library:
-/// at start, then every two minutes. Each history is read on from where the
-/// last read stopped, so a pass over unchanged files only looks at their
+/// at start, then every ten minutes and soon after a Woven Matter turn of
+/// a harness that keeps its own history. Each history is read on from where
+/// the last read stopped, so a pass over unchanged files only looks at their
 /// sizes. A pass first reads on the histories that grew, then those never
 /// read (or whose place cannot be trusted), newest first, for a bounded
 /// time; while some are left the next pass follows at once. So on a new
@@ -33,8 +34,10 @@ actor UsageScanner {
   private let environment: [String: String]
   private let chunk: Int
   private let slice: Duration
-  /// The time gone by, for the slice.
+  /// The time gone by, for the slice and the schedule, and a wait that
+  /// ends early when its task is cancelled.
   private let clock: @Sendable () -> Duration
+  private let sleep: @Sendable (Duration) async -> Void
   private var task: Task<Void, Never>?
   /// For tests: called with a history's source as its read begins.
   private let willRead: (@Sendable (String) async -> Void)?
@@ -50,7 +53,7 @@ actor UsageScanner {
   /// reads before it ends, by `clock`.
   init(library: Library, home: URL, environment: [String: String] = [:], chunk: Int = 64 * 1024 * 1024,
        slice: Duration = .seconds(20), willRead: (@Sendable (String) async -> Void)? = nil,
-       clock: (@Sendable () -> Duration)? = nil,
+       clock: (@Sendable () -> Duration)? = nil, sleep: (@Sendable (Duration) async -> Void)? = nil,
        log: @escaping @Sendable (String) -> Void = { FileHandle.standardOutput.write(Data(("woven-server: " + $0 + "\n").utf8)) }) {
     self.library = library
     self.home = home
@@ -59,16 +62,68 @@ actor UsageScanner {
     self.slice = slice
     let origin = ContinuousClock.now
     self.clock = clock ?? { ContinuousClock.now - origin }
+    self.sleep = sleep ?? { try? await Task.sleep(for: $0) }
     self.willRead = willRead
     self.log = log
   }
 
-  func start(every interval: Duration = .seconds(120)) {
+  /// Reads every ten minutes, passes back to back while a first read has
+  /// work left, and soon after `nudge()`: at most once a minute, after the
+  /// pass in progress if there is one. The ten minutes count from the last
+  /// pass of any kind.
+  func start(every interval: Duration = .seconds(600)) {
     task = Task { [weak self] in
       while !Task.isCancelled {
-        let left = await self?.scanAndReport() ?? 0
-        try? await Task.sleep(for: left > 0 ? .seconds(1) : interval)
+        guard let self else { return }
+        await self.cycle(every: interval)
       }
+    }
+  }
+
+  /// The least time between two passes that nudges bring forward.
+  static let nudgeWindow: Duration = .seconds(60)
+
+  /// A turn of a runtime that keeps its own history ended: read soon.
+  func nudge() {
+    nudged = true
+    waiting?.cancel()
+  }
+
+  /// Passes run, for tests.
+  private(set) var passes = 0
+  private var nudged = false
+  private var lastPass: Duration = .zero
+  private var lastEarly: Duration?
+  private var waiting: Task<Void, Never>?
+
+  /// One pass, then the wait until the next.
+  private func cycle(every interval: Duration) async {
+    nudged = false
+    let left = await scanAndReport()
+    passes += 1
+    lastPass = clock()
+    if left > 0 {
+      await sleep(.seconds(1))
+      return
+    }
+    while !Task.isCancelled {
+      let now = clock()
+      var due = lastPass + interval
+      if nudged {
+        // A nudge brings the next pass forward to a minute after the last
+        // pass it brought forward.
+        let earliest = lastEarly.map { $0 + Self.nudgeWindow } ?? now
+        due = min(due, max(now, earliest))
+      }
+      if now >= due {
+        if nudged, due < lastPass + interval { lastEarly = now }
+        return
+      }
+      // A nudge cuts the wait short; a stop ends it.
+      let sleeper = Task { [sleep] in await sleep(due - now) }
+      waiting = sleeper
+      await withTaskCancellationHandler { await sleeper.value } onCancel: { sleeper.cancel() }
+      waiting = nil
     }
   }
 

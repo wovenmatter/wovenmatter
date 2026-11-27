@@ -911,3 +911,110 @@ private func codexTurn(_ turn: String, at: String) -> String {
   for await event in events { received.append(event) }
   #expect(received == [LibraryEvent(changed: 2, tables: ["settings", "usage_hours"])])
 }
+
+/// Time a test moves by hand: a wait ends once the test moves past its end,
+/// or when its task is cancelled. Each wait's length is told as it begins.
+private final class HandTime: Sendable {
+  private struct Sleeper: Sendable {
+    let id: UUID
+    let wake: Duration
+    let continuation: CheckedContinuation<Void, Never>
+  }
+  private let state = Mutex<(now: Duration, sleepers: [Sleeper], cancelled: Set<UUID>)>((.zero, [], []))
+  private let started: AsyncStream<Duration>.Continuation
+  let waits: AsyncStream<Duration>
+
+  init() { (waits, started) = AsyncStream<Duration>.makeStream() }
+
+  var clock: @Sendable () -> Duration { { [self] in self.state.withLock { $0.now } } }
+  var sleep: @Sendable (Duration) async -> Void { { [self] length in await self.wait(length) } }
+
+  private func wait(_ length: Duration) async {
+    let id = UUID()
+    await withTaskCancellationHandler {
+      await withCheckedContinuation { continuation in
+        let cancelled = state.withLock { state -> Bool in
+          if state.cancelled.remove(id) != nil { return true }
+          state.sleepers.append(Sleeper(id: id, wake: state.now + length, continuation: continuation))
+          return false
+        }
+        if cancelled { continuation.resume() } else { started.yield(length) }
+      }
+    } onCancel: {
+      let sleeper = state.withLock { state -> Sleeper? in
+        if let index = state.sleepers.firstIndex(where: { $0.id == id }) { return state.sleepers.remove(at: index) }
+        state.cancelled.insert(id)
+        return nil
+      }
+      sleeper?.continuation.resume()
+    }
+  }
+
+  func advance(by length: Duration) {
+    let woken = state.withLock { state -> [Sleeper] in
+      state.now += length
+      let now = state.now
+      defer { state.sleepers.removeAll { $0.wake <= now } }
+      return state.sleepers.filter { $0.wake <= now }
+    }
+    for sleeper in woken { sleeper.continuation.resume() }
+  }
+}
+
+/// Usage is read every ten minutes; a nudge after a turn brings the next
+/// pass forward, at most once a minute however many come.
+@Test(.timeLimit(.minutes(1)))
+func usageIsReadEveryTenMinutesAndSoonAfterANudge() async throws {
+  let library = try await Library.open(folder: try temporary("usage-library"), machineName: "a")
+  let time = HandTime()
+  let scanner = UsageScanner(library: library, home: try temporary("usage-home"), clock: time.clock, sleep: time.sleep)
+  var waits = time.waits.makeAsyncIterator()
+  await scanner.start()
+  #expect(await waits.next() == .seconds(600))
+  #expect(await scanner.passes == 1)
+  time.advance(by: .seconds(599))
+  try await Task.sleep(for: .milliseconds(50))
+  #expect(await scanner.passes == 1)
+  time.advance(by: .seconds(1))
+  #expect(await waits.next() == .seconds(600))
+  #expect(await scanner.passes == 2)
+
+  // A nudge brings a pass forward at once; the ten minutes count from it.
+  time.advance(by: .seconds(10))
+  await scanner.nudge()
+  #expect(await waits.next() == .seconds(600))
+  #expect(await scanner.passes == 3)
+
+  // Within the minute, nudges wait for its end and give one pass.
+  time.advance(by: .seconds(5))
+  for _ in 0..<3 {
+    await scanner.nudge()
+    #expect(await waits.next() == .seconds(55))
+  }
+  #expect(await scanner.passes == 3)
+  time.advance(by: .seconds(55))
+  #expect(await waits.next() == .seconds(600))
+  #expect(await scanner.passes == 4)
+  await scanner.stop()
+}
+
+/// While a first read has work left, passes follow one another and a nudge
+/// changes nothing.
+@Test(.timeLimit(.minutes(1)))
+func aNudgeDuringAFirstReadChangesNothing() async throws {
+  let home = try temporary("usage-home")
+  for index in 0..<3 { try write(manyLines("msg", session: session(index), count: 1), to: claudeFile(home, session(index))) }
+  let library = try await Library.open(folder: try temporary("usage-library"), machineName: "a")
+  let time = HandTime()
+  let scanner = UsageScanner(library: library, home: home, slice: .zero, clock: time.clock, sleep: time.sleep)
+  var waits = time.waits.makeAsyncIterator()
+  await scanner.start()
+  #expect(await waits.next() == .seconds(1))
+  await scanner.nudge()
+  time.advance(by: .seconds(1))
+  #expect(await waits.next() == .seconds(1))
+  time.advance(by: .seconds(1))
+  #expect(await waits.next() == .seconds(600))
+  #expect(await scanner.passes == 3)
+  await scanner.stop()
+}

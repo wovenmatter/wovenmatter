@@ -310,7 +310,9 @@ library and so shows every machine.
   never deleted. So reading the same history again, in any order, gives the
   same rows.
 - The server reads each history on from where it stopped, at start and
-  every two minutes. Its place is kept in a local table, keyed by a digest of
+  every ten minutes, and soon after a Woven Matter turn with a harness that
+  keeps its own history ends: at most once a minute for such turns, after
+  the read in progress if there is one. Its place is kept in a local table, keyed by a digest of
   the path, with a digest of its first line and of the bytes just before the
   place; a history whose first line or those bytes changed is read again
   from its start, which counts nothing twice. A file is read to its end a

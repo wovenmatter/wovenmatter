@@ -426,3 +426,22 @@ func aPermissionTheRuntimeTakesOnlyAtStartRestartsItWithTheNewMode() async throw
   }
   #expect(runtime.state.withLock { $0.choices.permission } == "ask")
 }
+
+/// A finished turn of a runtime that keeps its own history asks for its
+/// usage to be read soon; one of a runtime that records its own usage does not.
+@Test(.timeLimit(.minutes(1)))
+func aHistoryRuntimesTurnAsksForItsUsageToBeRead() async throws {
+  let store = FileManager.default.temporaryDirectory.appendingPathComponent("fake-acp-\(UUID().uuidString)")
+  try FileManager.default.createDirectory(at: store, withIntermediateDirectories: true)
+  for (runtime, kind, expected) in [(try fakeRuntime(store: store) as any Runtime, RuntimeKind.codex, 1),
+                                    (StandInRuntime() as any Runtime, StandInRuntime.kind, 0)] {
+    let machine = try await TestMachine.start(runtime: runtime)
+    defer { machine.server.stopLater() }
+    let told = Mutex(0)
+    machine.server.sessions.historyTurns.set { told.withLock { $0 += 1 } }
+    let client = try await machine.connect()
+    let session = try await client.call(CreateSession(runtime: kind, title: "Chat"))
+    try await turn(client, session.id, "one")
+    #expect(told.withLock { $0 } == expected)
+  }
+}

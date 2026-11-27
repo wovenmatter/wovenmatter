@@ -11,6 +11,15 @@ final class FirstMessageHook: Sendable {
   func tell(_ sessionID: String, _ text: String) { action.withLock { $0 }?(sessionID, text) }
 }
 
+/// Told when a turn of a runtime that keeps its own history ends, so its
+/// usage is read soon.
+final class HistoryTurnHook: Sendable {
+  private let action = Mutex<(@Sendable () -> Void)?>(nil)
+
+  func set(_ value: @escaping @Sendable () -> Void) { action.withLock { $0 = value } }
+  func tell() { action.withLock { $0 }?() }
+}
+
 /// Names a new chat from the person's first message, the same way for every
 /// runtime: when `titles.enabled` is set, a throwaway native session of the
 /// title runtime (Codex, with `titles.model` and `titles.thinking`) is asked

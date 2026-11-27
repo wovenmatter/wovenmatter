@@ -111,6 +111,8 @@ actor SessionManager {
   nonisolated let configurations: RuntimeConfigurations
   /// Told of the person's first message in each session, for its title.
   nonisolated let firstMessages = FirstMessageHook()
+  /// Told when a turn of a runtime that keeps its own history ends.
+  nonisolated let historyTurns = HistoryTurnHook()
 
   init(library: Library, runtimes: [any Runtime], scratch: URL, toolKeys: ToolKeys? = nil) {
     self.toolKeys = toolKeys
@@ -197,7 +199,7 @@ actor SessionManager {
     let host = SessionHost(sessionID: sessionID, library: library, runtime: runtime, gone: gone, board: board,
                            configurations: configurations,
                            tools: toolKeys?.access(runtime.sharesToolBridge ? .runtime(runtime.kind) : .session(sessionID)),
-                           firstMessages: firstMessages)
+                           firstMessages: firstMessages, historyTurns: historyTurns)
     hosts[sessionID] = host
     return host
   }
@@ -280,10 +282,13 @@ actor SessionHost {
   /// its latest end and how much fell between, by item.
   private var overflow: [String: (head: String, tail: String, omitted: Int)] = [:]
   private let firstMessages: FirstMessageHook?
+  private let historyTurns: HistoryTurnHook?
 
   init(sessionID: String, library: Library, runtime: any Runtime, gone: Bool, board: RunBoard,
-       configurations: RuntimeConfigurations, tools: ToolAccess? = nil, firstMessages: FirstMessageHook? = nil) {
+       configurations: RuntimeConfigurations, tools: ToolAccess? = nil, firstMessages: FirstMessageHook? = nil,
+       historyTurns: HistoryTurnHook? = nil) {
     self.firstMessages = firstMessages
+    self.historyTurns = historyTurns
     self.tools = tools
     self.sessionID = sessionID
     self.library = library
@@ -686,7 +691,9 @@ actor SessionHost {
         await saving { try await self.finish(.notice(Notice(kind: .interrupted, text: "Stopped by \(stopper).")),
                                              id: UUID().uuidString.lowercased()) }
       }
-      // A harness with its own history is counted from there (`UsageScanner`).
+      // A harness with its own history is counted from there (`UsageScanner`),
+      // which is told to read it soon.
+      if runtime.kind.usageFromHistory { historyTurns?.tell() }
       if let usage, !runtime.kind.usageFromHistory {
         try? await library.recordUsage(sessionID: sessionID, runtime: runtime.kind, model: usage.model ?? configuration.model ?? "",
                                        input: usage.input, output: usage.output, cacheRead: usage.cacheRead,
