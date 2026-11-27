@@ -15,6 +15,7 @@ import { AgentError, humanMessage } from './rpc.mjs';
 import { availableModels, modelReference, offeredModels, refreshCatalogs, thinkingLevels } from './models.mjs';
 import { Projection } from './projection.mjs';
 import { Subagents, Workflow, connectMcp, createSearch } from './tools.mjs';
+import { countingSummaries, saveSummaryUsage } from './usage.mjs';
 
 const context = BACKGROUND_CONTEXT;
 export const SESSION_NOT_FOUND = -32002;
@@ -139,7 +140,8 @@ export class Session {
     ] }));
     this.storage = await openNodeSqliteStorage(path, { prefix: tablePrefix(this.sessionId) });
     this.harness = await Harness.open(this.storage, {
-      models: this.models.runtime, registry,
+      // Each compaction summary's usage is saved with its time as it returns.
+      models: countingSummaries(this.models.runtime, reply => saveSummaryUsage(path, this.sessionId, reply)), registry,
       env: target => new NodeExecutionEnv({ cwd: target.cwd ?? this.cwd }),
       settings: { toolExecution: 'parallel', compaction: { enabled: true } },
     }, context);

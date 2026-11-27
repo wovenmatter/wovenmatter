@@ -199,6 +199,42 @@ private func botUsage(_ database: DatabaseFile, bot: String, conversation: Int, 
   #expect(try await totals(old).totals.input == 60)
 }
 
+/// Pi Durable saves each of its summariser's calls in the store, counted at
+/// its own time; what a conversation's `pi.usage` sums beyond its entries
+/// is reduced by them, leaving only what no saved call covers, and what is
+/// left of the cost alone counts too.
+@Test func piDurablesSummaryCallsAreCountedOnce() async throws {
+  let url = try temporary("pi-data").appendingPathComponent("pi-durable/pi-durable.sqlite")
+  try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+  try DatabaseFile.create(at: url)
+  let database = try DatabaseFile(url: url, isCopy: false)
+  let session = "0b1c2d3e-4f50-4617-8899-aabbccddeeff"
+  let prefix = "s0b1c2d3e4f5046178899aabbccddeeff_"
+  try tableSet(database, prefix: prefix)
+  let day = Int64(1_767_610_800_000)
+  _ = try database.execute("""
+    CREATE TABLE woven_usage (call_id TEXT PRIMARY KEY, session TEXT NOT NULL, created_at INTEGER NOT NULL, provider TEXT NOT NULL,
+      model TEXT NOT NULL, input INTEGER NOT NULL, output INTEGER NOT NULL, cache_read INTEGER NOT NULL, cache_write INTEGER NOT NULL,
+      cost REAL NOT NULL) STRICT;
+    INSERT INTO \(prefix)entries VALUES \(assistant(3, at: day, input: 100, output: 10));
+    INSERT INTO woven_usage VALUES ('c1', '\(session)', \(day + 86_400_000), 'p', 'm', 30, 3, 0, 0, 0.25),
+      ('c2', '\(session)', \(day + 2 * 86_400_000), 'p', 'm', 40, 4, 0, 0, 0.25);
+    """)
+  let compaction = #"{"kind":"pi.compaction","model":[{"role":"user","content":"summary","timestamp":\#(day + 2 * 86_400_000)}]}"#
+  _ = try database.execute("INSERT INTO \(prefix)entries VALUES (8, 1, NULL, 8, '\(compaction)');")
+  // The sums hold both calls, and a cost of $1 more no saved call covers.
+  try usageDocument(database, prefix: prefix, conversation: 1, input: 170, output: 17, cost: 2)
+
+  let library = try await Library.open(folder: try temporary("usage-library"), machineName: "a")
+  let scanner = UsageScanner(library: library, home: try temporary("usage-home"), stores: [(.piDurable, url)])
+  #expect(await scanner.scan().added == 4)
+  let report = try await totals(library)
+  #expect(report.totals == UsageAmounts(input: 170, output: 17, cost: 2, requests: 4))
+  #expect(report.groups.map(\.period.timeIntervalSince1970).sorted()
+    == [day / 1000, day / 1000 + 86_400, day / 1000 + 2 * 86_400].map { Double($0 - $0 % 86_400) })
+  #expect(await scanner.scan().added == 0)
+}
+
 /// A large store is read a page at a time, each saved with its place, and a
 /// pass whose time is up ends between pages; every response counts once.
 @Test func aLargeStoreIsReadAPageAtATime() async throws {

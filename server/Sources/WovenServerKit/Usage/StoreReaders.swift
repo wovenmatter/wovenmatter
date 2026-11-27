@@ -99,6 +99,22 @@ enum PiStoreReader {
         // A full page may have more after it.
         if read.count >= max(limit, 1) || budget <= 0 { return (found, place, true) }
       }
+      if kind == .piDurable, try !database.query("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'woven_usage'").isEmpty {
+        // Each compaction summary's own call, saved as it returned.
+        let rows = try database.query("SELECT rowid, * FROM woven_usage WHERE rowid > ?1 ORDER BY rowid LIMIT ?2",
+                                      [.integer(place.usage), .integer(Int64(budget))])
+        for row in rows {
+          guard let id = row.integer("rowid") else { continue }
+          place.usage = max(place.usage, id)
+          guard let at = HistoryReader.date(row.integer("created_at").map(Double.init)), let session = row.text("session"),
+                let call = row.text("call_id") else { continue }
+          if let entry = entry(id: "piDurable:call:\(call)", kind: kind, session: session.lowercased(),
+                               model: modelName(row.text("provider"), row.text("model")), at: at, amounts: amounts(row)) {
+            found.append(entry)
+          }
+        }
+        if rows.count >= budget { return (found, place, true) }
+      }
       if kind == .bots, try !database.query("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'bot_usage'").isEmpty {
         var resolvers: [String: (Int64) -> String] = [:]
         for set in sets { if let bot = set.bot { resolvers[bot] = try resolver(database, set: set, tables: []) } }
@@ -208,7 +224,9 @@ enum PiStoreReader {
   /// calls no entry keeps (compaction summaries). One response per
   /// conversation and model, dated at the conversation's newest compaction
   /// summary (else its newest response); it grows as more such calls are
-  /// made.
+  /// made. Pi Durable saves each summary call of its own in `woven_usage`,
+  /// counted on its own; what is left beyond those is one response per
+  /// session and model, summed over its conversations.
   private static func remainders(_ database: ReadOnlyDatabase, set: TableSet, kind: PiStoreKind, resolve: (Int64) -> String,
                                  place: inout PiStorePlace) throws -> [UsageEntry] {
     let documents = quoted(set.prefix + "documents"), revisions = quoted(set.prefix + "document_revisions")
@@ -219,10 +237,17 @@ enum PiStoreReader {
         AND r.seq = (SELECT MAX(seq) FROM \(revisions) WHERE document_id = d.id)
       """)
     var seen = place.documents[set.prefix] ?? [:]
+    let whole = kind == .piDurable
+    if whole {
+      let changed = docs.contains { doc in doc.integer("id").map { seen["\($0)"] != doc.integer("seq") } ?? false }
+      guard changed else { return [] }
+    }
     var found: [UsageEntry] = []
+    var left: [String: [Double]] = [:]
+    var latest: Date?
     for doc in docs {
       guard let id = doc.integer("id"), let seq = doc.integer("seq"), let conversation = doc.integer("conversation") else { continue }
-      guard seen["\(id)"] != seq else { continue }
+      guard whole || seen["\(id)"] != seq else { continue }
       seen["\(id)"] = seq
       guard let content = (try? JSONSerialization.jsonObject(with: Data((doc.text("content") ?? "").utf8))) as? [String: Any],
             let models = content["models"] as? [String: Any] else { continue }
@@ -253,17 +278,49 @@ enum PiStoreReader {
         let cost = HistoryReader.amount((total["cost"] as? [String: Any])?["total"]) ?? 0
         let totals = ["input", "output", "cacheRead", "cacheWrite"].map { Double(HistoryReader.count(total[$0])) } + [cost]
         let rest = zip(totals, sums).map { max(0, $0 - $1) }
-        guard rest.prefix(4).contains(where: { $0 >= 1 }) else { continue }
-        let amounts = rest.prefix(4).map { Int64($0.rounded()) }
-        if let entry = entry(id: "\(kind.runtime.rawValue):\(set.name):\(conversation):calls:\(model)", kind: kind,
-                             session: resolve(conversation), model: model, at: at,
-                             amounts: (amounts[0], amounts[1], amounts[2], amounts[3], rest[4])) {
+        if whole {
+          left[model] = zip(left[model] ?? [0, 0, 0, 0, 0], rest).map(+)
+          latest = max(latest ?? at, at)
+          continue
+        }
+        if let entry = remainder(id: "\(kind.runtime.rawValue):\(set.name):\(conversation):calls:\(model)", kind: kind,
+                                 session: resolve(conversation), model: model, at: at, rest: rest) {
+          found.append(entry)
+        }
+      }
+    }
+    if whole, let latest {
+      let session = set.session(0)
+      if try !database.query("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'woven_usage'").isEmpty {
+        for row in try database.query("""
+          SELECT provider, model, TOTAL(input) AS input, TOTAL(output) AS output, TOTAL(cache_read) AS cache_read,
+            TOTAL(cache_write) AS cache_write, TOTAL(cost) AS cost
+          FROM woven_usage WHERE lower(session) = ?1 GROUP BY 1, 2
+          """, [.text(session)]) {
+          let model = modelName(row.text("provider"), row.text("model"))
+          guard let rest = left[model] else { continue }
+          let saved = ["input", "output", "cache_read", "cache_write", "cost"].map { real(row[$0]) }
+          left[model] = zip(rest, saved).map { max(0, $0 - $1) }
+        }
+      }
+      for (model, rest) in left.sorted(by: { $0.key < $1.key }) {
+        if let entry = remainder(id: "\(kind.runtime.rawValue):\(set.name):calls:\(model)", kind: kind, session: session,
+                                 model: model, at: latest, rest: rest) {
           found.append(entry)
         }
       }
     }
     place.documents[set.prefix] = seen
     return found
+  }
+
+  /// One response for what is left of a model's sums, tokens or cost.
+  private static func remainder(id: String, kind: PiStoreKind, session: String, model: String, at: Date,
+                                rest: [Double]) -> UsageEntry? {
+    let amounts = rest.prefix(4).map { Int64($0.rounded(.down)) }
+    let cost = rest[4] >= 0.000_000_1 ? rest[4] : 0
+    return entry(id: id, kind: kind, session: session, model: model, at: at,
+                 amounts: (amounts[0], amounts[1], amounts[2], amounts[3], cost))
   }
 
   private static func amounts(_ row: Row) -> (Int64, Int64, Int64, Int64, Double) {
