@@ -147,35 +147,82 @@ struct ConversationMarkdownDocument: Sendable {
         return (blocks, (offset, cut.blockCount))
     }
 
-    /// A reply cut off mid-stream, made to show its last line as what it
-    /// was becoming: a table's header row with no separator yet (or with only
-    /// part of one) is dropped, since it would draw as a row of pipes; an
-    /// open inline code span, bold run or link target on the last line is
-    /// closed. A row of an established table, finished or not, stays a row.
+    /// A reply cut off mid-stream, made to show its last block as what it
+    /// was becoming; anything the parser already draws as intended comes back
+    /// unchanged, and only the last block is ever touched.
+    /// - A header row with no separator yet, as the very last line (a line
+    ///   that starts with `|` and has at least two cells), is dropped: in a
+    ///   cut reply it can only be the start of a table, or prose that looks
+    ///   like one, and the two cannot be told apart. A header row with part
+    ///   of its separator under it is dropped with it.
+    /// - An inline code span, bold run or link target left open on the last
+    ///   line is closed; code spans are skipped when looking (CommonMark's
+    ///   rule: a run of backticks closes at the next run of the same length).
+    /// - Inside an open code fence nothing changes: it draws as code already.
+    /// A row of an established table, finished or not, stays a row.
     static func finishingCutText(_ text: String) -> String {
         var lines = text.components(separatedBy: "\n")
-        // Inside an open code fence the text is code, drawn as a code box already.
-        let fences = lines.filter { Parser.fenceOpening($0) != nil }.count
-        guard fences % 2 == 0 else { return text }
-        while let last = lines.last, Parser.isBlank(last) { lines.removeLast() }
-        guard let last = lines.last else { return text }
+        // An open fence, by the parser's matching: same character, at least as long.
+        var fence: Fence?
+        for line in lines {
+            if let open = fence {
+                if Parser.isFenceClosing(line, matching: open) { fence = nil }
+            } else if let opening = Parser.fenceOpening(line) {
+                fence = opening
+            }
+        }
+        guard fence == nil else { return text }
+        // The text's very last line, or the one before a single last line break.
+        if lines.count > 1, lines[lines.count - 1].isEmpty { lines.removeLast() }
+        guard let last = lines.last, !Parser.isBlank(last) else { return text }
+        func isHeaderCandidate(_ line: String) -> Bool {
+            line.trimmingCharacters(in: .whitespaces).first == "|" && (Parser.tableCells(line)?.count ?? 0) >= 2
+        }
+        func isTableLine(_ line: String?) -> Bool { line.map { Parser.tableCells($0) != nil } ?? false }
         let before = lines.count > 1 ? lines[lines.count - 2] : nil
-        func isTableLine(_ line: String?) -> Bool { line.map { Parser.tableCellCount($0) != nil } ?? false }
-        if last.trimmingCharacters(in: .whitespaces).first == "|", (Parser.tableCellCount(last) ?? 0) >= 2,
-           !isTableLine(before) {
-            // A header row alone: the table it starts has not begun.
+        if isHeaderCandidate(last), !isTableLine(before) {
+            // A header row alone.
             lines.removeLast()
-        } else if let before, last.trimmingCharacters(in: .whitespaces).allSatisfy({ "|-: ".contains($0) }),
-                  !Parser.separates(header: before, separator: last),
-                  !isTableLine(lines.count > 2 ? lines[lines.count - 3] : nil) {
+            return lines.joined(separator: "\n")
+        }
+        if let before, isHeaderCandidate(before), last.contains("|"),
+           last.trimmingCharacters(in: .whitespaces).allSatisfy({ "|-: ".contains($0) }),
+           !Parser.startsTable(header: before, separator: last),
+           !isTableLine(lines.count > 2 ? lines[lines.count - 3] : nil) {
             // A header row and part of its separator.
             lines.removeLast(2)
+            return lines.joined(separator: "\n")
         }
-        guard var tail = lines.popLast() else { return lines.joined(separator: "\n") }
-        if tail.filter({ $0 == "`" }).count % 2 == 1 { tail += "`" }
-        if tail.components(separatedBy: "**").count % 2 == 0 { tail += "**" }
-        if let open = tail.range(of: "](", options: .backwards), !tail[open.upperBound...].contains(")") { tail += ")" }
-        lines.append(tail)
+        // Open inline markup on the last line, outside its code spans.
+        let characters = Array(last)
+        var outside = ""
+        var openRun = 0
+        var index = 0
+        scan: while index < characters.count {
+            guard characters[index] == "`" else { outside.append(characters[index]); index += 1; continue }
+            var run = 0
+            while index + run < characters.count, characters[index + run] == "`" { run += 1 }
+            var search = index + run
+            while search < characters.count {
+                if characters[search] == "`" {
+                    var other = 0
+                    while search + other < characters.count, characters[search + other] == "`" { other += 1 }
+                    if other == run { index = search + other; continue scan }
+                    search += other
+                } else {
+                    search += 1
+                }
+            }
+            // No closing run: the rest of the line is code that was being written.
+            openRun = run
+            break
+        }
+        var closing = ""
+        if openRun > 0 { closing += String(repeating: "`", count: openRun) }
+        if outside.components(separatedBy: "**").count % 2 == 0 { closing += "**" }
+        if let open = outside.range(of: "](", options: .backwards), !outside[open.upperBound...].contains(")") { closing += ")" }
+        guard !closing.isEmpty else { return text }
+        lines[lines.count - 1] = last + closing
         return lines.joined(separator: "\n")
     }
 
@@ -249,15 +296,19 @@ private extension ConversationMarkdownDocument {
         /// The fence of a code block open in `content`, whose lines keep
         /// their indent past the item's.
         var fence: Fence?
-        /// `content` ends in a paragraph a lazy line can continue, kept as
-        /// lines are added rather than parsed again for each one.
-        var endsInParagraph = false
-        /// `content` ends in a table, whose rows a paragraph never takes.
-        var inTable = false
-        /// How many lines the paragraph `content` ends in has, and its last
-        /// line: what decides a setext underline and a table's header.
-        var paragraphLines = 0
+        /// The block `content` ends in, kept as lines are added rather than
+        /// parsed again for each one, and its last line, which the parser
+        /// reads again once the next line is known (a setext underline or a
+        /// table separator can change what it was).
+        var block: Parser.Opened = .none
         var lastLine = ""
+        /// `lastLine` began `block`.
+        var lastStartedBlock = false
+        /// A code fence open in `content`, however its opening line came.
+        var openFence: Fence?
+
+        /// `content` ends in a paragraph a lazy line can continue.
+        var endsInParagraph: Bool { block == .paragraph }
 
         /// A seed whose `content` is its first line.
         init(depth: Int, marker: String, checked: Bool?, continuationIndent: Int, content: String, continuation: Bool = false) {
@@ -268,9 +319,68 @@ private extension ConversationMarkdownDocument {
             self.content = content
             self.continuation = continuation
             fence = Parser.fenceOpening(content)
-            endsInParagraph = Parser.startsParagraph(content)
-            paragraphLines = endsInParagraph ? 1 : 0
-            lastLine = content
+            start(content)
+        }
+
+        private mutating func start(_ line: String) {
+            block = Parser.opened(by: line)
+            openFence = Parser.fenceOpening(line)
+            lastLine = line
+            lastStartedBlock = true
+        }
+
+        /// Records the block `content` ends in once `line` is added, `afterBlank`
+        /// when blank lines came before it, by the parser's own predicates in
+        /// the parser's order (`Parser.parse`, `parseParagraph`).
+        mutating func track(_ line: String, afterBlank: Bool) {
+            // Inside an open fence every line is code, up to the closing one.
+            if openFence != nil { return trackCode(line) }
+            guard !afterBlank else { return start(line) }
+            // The line above began its block: the parser reads it with this
+            // line in view, a setext underline before a table, both before
+            // a rule, a list or a quote; a fence or a heading came first.
+            if lastStartedBlock, block != .heading, block != .code {
+                if Parser.setextLevel(lastLine, underline: line) != nil {
+                    block = .heading
+                    lastLine = line
+                    lastStartedBlock = false
+                    return
+                }
+                if Parser.startsTable(header: lastLine, separator: line) {
+                    block = .table
+                    lastLine = line
+                    lastStartedBlock = false
+                    return
+                }
+            }
+            // A paragraph line with a separator under it ends the paragraph:
+            // it starts a table, or with other cells a paragraph of its own.
+            if block == .paragraph, !lastStartedBlock, Parser.interruptsParagraph(lastLine, next: line) {
+                if Parser.startsTable(header: lastLine, separator: line) {
+                    block = .table
+                    lastLine = line
+                    lastStartedBlock = false
+                    return
+                }
+                lastStartedBlock = true
+            }
+            switch block {
+            case .paragraph where !Parser.interruptsParagraph(line, next: nil),
+                 .table where Parser.tableCells(line) != nil,
+                 .quote where Parser.isQuote(line):
+                lastLine = line
+                lastStartedBlock = false
+            default:
+                start(line)
+            }
+        }
+
+        /// A line of the item's fenced code.
+        mutating func trackCode(_ line: String) {
+            if let open = openFence, Parser.isFenceClosing(line, matching: open) { openFence = nil }
+            block = .code
+            lastLine = line
+            lastStartedBlock = false
         }
     }
 
@@ -352,10 +462,9 @@ private extension ConversationMarkdownDocument {
         }
 
         private mutating func parseTableIfPresent() -> Table? {
-            guard index + 1 < lines.count,
+            guard index + 1 < lines.count, Self.startsTable(header: lines[index], separator: lines[index + 1]),
                   let headerCells = Self.tableCells(lines[index]),
-                  let alignments = Self.tableSeparator(lines[index + 1]),
-                  headerCells.count == alignments.count else {
+                  let alignments = Self.tableSeparator(lines[index + 1]) else {
                 return nil
             }
 
@@ -400,10 +509,8 @@ private extension ConversationMarkdownDocument {
                 if let last = seeds.last, let fence = last.fence, Self.isBlank(line) == false,
                    Self.leadingIndent(line) >= last.continuationIndent {
                     let text = Self.removingIndent(line, columns: last.continuationIndent)
+                    seeds[seeds.count - 1].track(text, afterBlank: pendingBlankLines > 0)
                     add(text)
-                    seeds[seeds.count - 1].endsInParagraph = false
-                    seeds[seeds.count - 1].paragraphLines = 0
-                    seeds[seeds.count - 1].lastLine = text
                     if Self.isFenceClosing(text, matching: fence) { seeds[seeds.count - 1].fence = nil }
                     index += 1
                     continue
@@ -435,38 +542,7 @@ private extension ConversationMarkdownDocument {
                 }
 
                 let text = line.trimmingCharacters(in: .whitespaces)
-                /// Records what the last item ends in once `text` is added, by
-                /// the parser's own rules: a paragraph goes on through lines
-                /// that cannot interrupt it; a blank line, a code block, a
-                /// heading, a rule, a quote or a table ends it; `===` under a
-                /// paragraph of one line makes it a heading, under a longer
-                /// one it is more of the paragraph; a separator under a line
-                /// with as many cells starts a table.
-                func track(_ text: String) {
-                    let last = seeds.count - 1
-                    let continuing = pendingBlankLines == 0 && seeds[last].endsInParagraph
-                    defer { seeds[last].lastLine = text }
-                    if pendingBlankLines == 0, seeds[last].inTable, Self.tableCells(text) != nil {
-                        seeds[last].endsInParagraph = false
-                        return
-                    }
-                    seeds[last].inTable = false
-                    if pendingBlankLines == 0, let alignments = Self.tableSeparator(text),
-                       Self.tableCells(seeds[last].lastLine)?.count == alignments.count {
-                        seeds[last].inTable = true
-                        seeds[last].endsInParagraph = false
-                        seeds[last].paragraphLines = 0
-                        return
-                    }
-                    if continuing, !text.isEmpty, text.allSatisfy({ $0 == "=" }) {
-                        seeds[last].endsInParagraph = seeds[last].paragraphLines != 1
-                        seeds[last].paragraphLines = seeds[last].endsInParagraph ? seeds[last].paragraphLines + 1 : 0
-                        return
-                    }
-                    let paragraph = Self.startsParagraph(text)
-                    seeds[last].endsInParagraph = paragraph
-                    seeds[last].paragraphLines = !paragraph ? 0 : continuing ? seeds[last].paragraphLines + 1 : 1
-                }
+                func track(_ text: String) { seeds[seeds.count - 1].track(text, afterBlank: pendingBlankLines > 0) }
                 if Self.leadingIndent(line) >= seeds[seeds.count - 1].continuationIndent {
                     track(text)
                     add(text)
@@ -559,9 +635,14 @@ private extension ConversationMarkdownDocument {
         }
 
         private func setextHeadingLevel() -> Int? {
-            guard index + 1 < lines.count, Self.isBlank(lines[index]) == false else { return nil }
-            guard Self.leadingIndent(lines[index + 1]) <= 3 else { return nil }
-            let underline = lines[index + 1].trimmingCharacters(in: .whitespaces)
+            guard index + 1 < lines.count else { return nil }
+            return Self.setextLevel(lines[index], underline: lines[index + 1])
+        }
+
+        /// The setext heading level `underline` gives the line `line` above it.
+        static func setextLevel(_ line: String, underline: String) -> Int? {
+            guard isBlank(line) == false, leadingIndent(underline) <= 3 else { return nil }
+            let underline = underline.trimmingCharacters(in: .whitespaces)
             guard underline.count >= 3 else { return nil }
             if underline.allSatisfy({ $0 == "=" }) { return 1 }
             if underline.allSatisfy({ $0 == "-" }) { return 2 }
@@ -569,19 +650,44 @@ private extension ConversationMarkdownDocument {
         }
 
         private func isBlockStart(at candidate: Int) -> Bool {
-            let line = lines[candidate]
-            if Self.isIndentedCode(line) {
+            Self.interruptsParagraph(lines[candidate], next: candidate + 1 < lines.count ? lines[candidate + 1] : nil)
+        }
+
+        /// Whether `line` ends the paragraph above it and starts a block,
+        /// `next` being the line after it (nil when not known).
+        static func interruptsParagraph(_ line: String, next: String?) -> Bool {
+            if isIndentedCode(line) {
                 return false
             }
-            if Self.fenceOpening(line) != nil
-                || Self.heading(line) != nil
-                || Self.listMarker(line) != nil
-                || Self.isQuote(line)
-                || Self.isThematicBreak(line) {
+            if fenceOpening(line) != nil
+                || heading(line) != nil
+                || listMarker(line) != nil
+                || isQuote(line)
+                || isThematicBreak(line) {
                 return true
             }
-            guard candidate + 1 < lines.count else { return false }
-            return Self.tableCells(line) != nil && Self.tableSeparator(lines[candidate + 1]) != nil
+            guard let next else { return false }
+            return tableCells(line) != nil && tableSeparator(next) != nil
+        }
+
+        /// Whether a table starts at `header` with `separator` under it.
+        static func startsTable(header: String, separator: String) -> Bool {
+            guard let cells = tableCells(header), let alignments = tableSeparator(separator) else { return false }
+            return cells.count == alignments.count
+        }
+
+        /// The kind of block a line opens where a block starts (`parse`),
+        /// before the line after it is known.
+        enum Opened { case none, code, heading, divider, list, quote, paragraph, table }
+        static func opened(by line: String) -> Opened {
+            if isBlank(line) { return .none }
+            if isIndentedCode(line) { return .code }
+            if fenceOpening(line) != nil { return .code }
+            if heading(line) != nil { return .heading }
+            if isThematicBreak(line) { return .divider }
+            if listMarker(line) != nil { return .list }
+            if isQuote(line) { return .quote }
+            return .paragraph
         }
 
         static func isBlank(_ line: String) -> Bool {
@@ -601,7 +707,7 @@ private extension ConversationMarkdownDocument {
             return Fence(character: character, length: length, language: language)
         }
 
-        private static func isFenceClosing(_ line: String, matching fence: Fence) -> Bool {
+        static func isFenceClosing(_ line: String, matching fence: Fence) -> Bool {
             guard leadingIndent(line) <= 3 else { return false }
             let trimmed = line.drop(while: { $0 == " " || $0 == "\t" })
             let length = trimmed.prefix(while: { $0 == fence.character }).count
@@ -668,7 +774,7 @@ private extension ConversationMarkdownDocument {
             )
         }
 
-        private static func isQuote(_ line: String) -> Bool {
+        static func isQuote(_ line: String) -> Bool {
             guard leadingIndent(line) <= 3 else { return false }
             return line.drop(while: { $0 == " " || $0 == "\t" }).first == ">"
         }
@@ -687,13 +793,6 @@ private extension ConversationMarkdownDocument {
             return compact.allSatisfy { $0 == marker }
         }
 
-        /// Whether a line, trimmed, is paragraph text: one that starts or
-        /// continues a paragraph rather than a code block, heading, rule,
-        /// quote or setext underline.
-        static func startsParagraph(_ line: String) -> Bool {
-            !isBlank(line) && fenceOpening(line) == nil && heading(line) == nil && !isThematicBreak(line)
-                && !isQuote(line) && listMarker(line) == nil
-        }
 
         /// `line` without up to `columns` of its leading spaces and tabs.
         private static func removingIndent(_ line: String, columns: Int) -> String {
@@ -723,12 +822,6 @@ private extension ConversationMarkdownDocument {
         /// How many cells `line` has as a table row, or nil when it is not one.
         static func tableCellCount(_ line: String) -> Int? { tableCells(line)?.count }
 
-        /// Whether `separator` is a table separator for a header `header`.
-        static func separates(header: String, separator: String) -> Bool {
-            guard let cells = tableCells(header), let alignments = tableSeparator(separator) else { return false }
-            return cells.count == alignments.count
-        }
-
         private static func tableSeparator(_ line: String) -> [TableAlignment]? {
             guard leadingIndent(line) <= 3 else { return nil }
             guard let cells = tableCells(line), cells.isEmpty == false else { return nil }
@@ -748,7 +841,7 @@ private extension ConversationMarkdownDocument {
             return alignments
         }
 
-        private static func tableCells(_ line: String) -> [String]? {
+        static func tableCells(_ line: String) -> [String]? {
             var value = line.trimmingCharacters(in: .whitespaces)
             guard value.contains("|") else { return nil }
             if value.first == "|" {

@@ -1027,6 +1027,10 @@ private enum ConversationResponseAttributedText {
             .monospacedSystemFont(ofSize: size * responseStyle.scale, weight: .regular)
         }
         let body = font(15)
+        func headingFont(_ level: Int) -> ResponseFont {
+            let size: CGFloat = switch level { case 1: 22; case 2: 19; case 3: 17; default: 15.5 }
+            return font(size, .semibold)
+        }
 
         func paragraphStyle(indent: CGFloat, before: CGFloat, lineSpacing: CGFloat = Prose.lineSpacing) -> NSMutableParagraphStyle {
             let style = NSMutableParagraphStyle()
@@ -1086,13 +1090,14 @@ private enum ConversationResponseAttributedText {
                         if value != nil, range.length <= Prose.shortLinkLength { links.append(range) }
                     }
                 }
+                // UTF-16 code units of ( [ and ) ] , . (a surrogate is none of them).
+                let opening: Set<unichar> = [0x28, 0x5B], closing: Set<unichar> = [0x29, 0x5D, 0x2C, 0x2E]
                 for link in links {
                     var range = link
-                    if range.location > 0, "([".contains(Character(UnicodeScalar(string.character(at: range.location - 1))!)) {
+                    if range.location > 0, opening.contains(string.character(at: range.location - 1)) {
                         range = NSRange(location: range.location - 1, length: range.length + 1)
                     }
-                    while NSMaxRange(range) < string.length,
-                          ")],.".contains(Character(UnicodeScalar(string.character(at: NSMaxRange(range)))!)) {
+                    while NSMaxRange(range) < string.length, closing.contains(string.character(at: NSMaxRange(range))) {
                         range.length += 1
                     }
                     result.addAttribute(.responseNoBreak, value: ResponseNoBreak.line, range: range)
@@ -1231,8 +1236,7 @@ private enum ConversationResponseAttributedText {
             case .paragraph(let content):
                 appendInline(content, font: body, style: paragraphStyle(indent: indent, before: before), marker: marker)
             case .heading(let level, let content):
-                let size: CGFloat = switch level { case 1: 22; case 2: 19; case 3: 17; default: 15.5 }
-                appendInline(content, font: font(size, .semibold), style: paragraphStyle(indent: indent, before: before),
+                appendInline(content, font: headingFont(level), style: paragraphStyle(indent: indent, before: before),
                              marker: marker)
             case .list(let items):
                 // Nesting steps by level, however many spaces the source used,
@@ -1251,8 +1255,12 @@ private enum ConversationResponseAttributedText {
                 /// its line.
                 func wraps(_ item: ConversationMarkdownDocument.ListItem, textIndent: CGFloat) -> Bool {
                     guard item.blocks.count == 1 else { return item.blocks.count > 1 }
-                    guard case .paragraph(let content) = item.blocks[0] else { return true }
-                    let text = inline(content, font: body)
+                    let text: NSAttributedString
+                    switch item.blocks[0] {
+                    case .paragraph(let content): text = inline(content, font: body)
+                    case .heading(let level, let content): text = inline(content, font: headingFont(level))
+                    default: return true
+                    }
                     return text.string.contains("\n") || text.size().width > width - textIndent
                 }
                 for (index, item) in items.enumerated() {
@@ -1522,7 +1530,8 @@ private enum ConversationResponseAttributedText {
                     var best: (choice: Choice, height: CGFloat, broken: Int)?
                     var measuredChoices: [Choice] = []
                     @discardableResult
-                    func consider(_ candidate: Choice) -> Bool {
+                    /// With `onlyIfShorter`, a candidate wins only by being a line shorter.
+                    func consider(_ candidate: Choice, onlyIfShorter: Bool = false) -> Bool {
                         guard !measuredChoices.contains(where: { $0.code == candidate.code && $0.kept == candidate.kept && $0.widths == candidate.widths })
                         else { return false }
                         measuredChoices.append(candidate)
@@ -1530,7 +1539,8 @@ private enum ConversationResponseAttributedText {
                         tableCells(cellTexts(candidate.code, keeping: candidate.kept), candidate.widths, into: text)
                         let measured = Self.measuredTable(text, width: width)
                         guard best.map({ measured.height < $0.height - line
-                            || (abs(measured.height - $0.height) <= line && measured.broken < $0.broken) }) ?? true else { return false }
+                            || (!onlyIfShorter && abs(measured.height - $0.height) <= line && measured.broken < $0.broken) }) ?? true
+                        else { return false }
                         best = (candidate, measured.height, measured.broken)
                         return true
                     }
@@ -1587,7 +1597,7 @@ private enum ConversationResponseAttributedText {
                                     var shifted = widths
                                     shifted[from] -= shift
                                     shifted[to] += shift
-                                    consider((current.choice.code, current.choice.kept, shifted))
+                                    consider((current.choice.code, current.choice.kept, shifted), onlyIfShorter: true)
                                 }
                             }
                         }
@@ -1699,7 +1709,8 @@ private enum ConversationResponseAttributedText {
         }
         for index in 0...string.length {
             let breaks = index == string.length || (
-                CharacterSet.whitespacesAndNewlines.contains(UnicodeScalar(string.character(at: index)) ?? " ")
+                // A surrogate half (an emoji) is part of a word, never a space.
+                UnicodeScalar(string.character(at: index)).map { CharacterSet.whitespacesAndNewlines.contains($0) } == true
                 && !isKept(index))
             guard breaks else { continue }
             if index > start {
