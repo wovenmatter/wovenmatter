@@ -427,6 +427,7 @@ export class ClaudeAgentStream {
           resolve();
         } else if (event.type === "result") {
           resultUsage = event.usage ?? resultUsage;
+          if (!replyUsage && compact !== undefined && resultUsage) message.usage = usageOf(resultUsage);
           // A tool call ends the only allowed turn: Pi, not Claude Code, runs the tool.
           if (event.is_error && event.subtype !== "error_max_turns") {
             const reported = [event.api_error_status, event.result, ...(event.errors ?? [])]
@@ -452,6 +453,8 @@ export class ClaudeAgentStream {
           if (id !== replyId) continue;
           reply.push(...(event.message?.content ?? []));
           replyUsage = event.message?.usage ?? replyUsage;
+          // Kept as it arrives, so a stop after this frame keeps what the call used.
+          if (replyUsage) message.usage = usageOf(replyUsage);
           stopReason = event.message?.stop_reason ?? stopReason;
         }
       }

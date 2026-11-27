@@ -6,7 +6,10 @@ import { openSharedDatabase } from "../src/storage/database.ts";
 import { BotRegistry, USAGE_TABLE } from "../src/storage/registry.ts";
 import { TitleGenerator } from "../src/titles.ts";
 import type { Api, Model, Models } from "@earendil-works/pi-ai";
-import { CLAUDE_AGENT_API, compactNative } from "../src/compaction/native.ts";
+import { claudeAgentProvider } from "../src/claude/provider.ts";
+import type { ClaudeSdkQuery } from "../src/claude/runtime.ts";
+import { CLAUDE_AGENT_API, codexCompact, compactNative } from "../src/compaction/native.ts";
+import { NATIVE_KEY } from "../src/host/credentials.ts";
 import { providerUsage, replyUsage } from "../src/usage.ts";
 import { FAUX_MODEL, tempDir } from "./helpers.ts";
 
@@ -62,6 +65,49 @@ describe("usage outside a conversation", () => {
     const model = { provider: "claude", id: "c", api: CLAUDE_AGENT_API } as unknown as Model<Api>;
     await expect(compactNative({ models, model, messages: [], onUsage: (usage) => used.push(usage) })).rejects.toThrow();
     expect(used).toEqual([{ input: 9, output: 2, cacheRead: 0, cacheWrite: 0 }]);
+  });
+
+  it("reports a Codex compaction's usage from its end, past a created response with none, before its item is refused", async () => {
+    const used: unknown[] = [];
+    const frames = [
+      { type: "response.created", response: { id: "r", usage: null } },
+      { type: "response.output_item.done", item: { type: "compaction", encrypted_content: "" } },
+      { type: "response.completed", response: { id: "r", usage: { input_tokens: 50, output_tokens: 4 } } },
+    ];
+    const fetch = async () =>
+      new Response(frames.map((frame) => `data: ${JSON.stringify(frame)}\n\n`).join(""), {
+        headers: { "content-type": "text/event-stream" },
+      });
+    const route = { provider: "openai-codex", modelId: "g", api: "openai-codex-responses", strategy: "codex", endpoint: "https://codex.invalid/responses" };
+    const captured = { url: route.endpoint, headers: new Headers(), payload: { model: "g", input: [] } };
+    const request = { models: {} as Models, model: {} as Model<Api>, messages: [], onUsage: (usage: unknown) => used.push(usage) };
+    await expect(codexCompact(route as never, captured, request, fetch as never)).rejects.toThrow(/no content/);
+    expect(used).toEqual([{ input_tokens: 50, output_tokens: 4 }]);
+  });
+
+  it("keeps a Claude reply's usage when a stop lands after its frame", async () => {
+    const dir = await tempDir();
+    try {
+      const controller = new AbortController();
+      const query: ClaudeSdkQuery = () =>
+        (async function* () {
+          yield {
+            type: "assistant",
+            parent_tool_use_id: null,
+            message: { id: "msg_1", stop_reason: "end_turn", content: [{ type: "text", text: "Hi" }], usage: { input_tokens: 7, output_tokens: 2 } },
+          };
+          controller.abort();
+        })();
+      const { provider } = claudeAgentProvider({ directory: join(dir.path, "claude"), query });
+      const model = { id: "opus", api: "claude-agent-sdk", provider: "claude-subscription" } as never;
+      const reply = await provider
+        .stream(model, { messages: [{ role: "user", content: "hi", timestamp: 0 }] } as never, { apiKey: NATIVE_KEY, signal: controller.signal } as never)
+        .result();
+      expect(reply.stopReason).toBe("aborted");
+      expect(reply.usage).toMatchObject({ input: 7, output: 2 });
+    } finally {
+      await dir.cleanup();
+    }
   });
 
   it("saves a call's usage once under its own identifier, trying again after a failed save, before the store closes", async () => {

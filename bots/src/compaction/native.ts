@@ -471,7 +471,7 @@ async function* sseEvents(response: Response, signal?: AbortSignal): AsyncGenera
  * ChatGPT subscription (Codex): append `{type: "compaction_trigger"}` to a streamed Responses turn
  * and collect exactly one `compaction` item, as official Codex and Woven do.
  */
-async function codexCompact(
+export async function codexCompact(
   route: NativeRoute,
   captured: CapturedRequest,
   request: CompactRequest,
@@ -521,11 +521,13 @@ async function codexCompact(
   let completed: Json | undefined;
   let emitted = false;
   let used = false;
+  let invalid = false;
   for await (const event of sseEvents(response, request.signal)) {
     const type = event.type;
-    // A finished, failed or cut-off response reports its usage once, before it is checked.
+    // The first usage the response reports (a created response has none yet), before
+    // anything in it is checked.
     const reported = (event.response as Json | undefined)?.usage;
-    if (!used && reported !== undefined) {
+    if (!used && reported !== undefined && reported !== null) {
       used = true;
       request.onUsage?.(reported);
     }
@@ -544,18 +546,17 @@ async function codexCompact(
         (candidate.type === "compaction" || candidate.type === "compaction_summary")
       ) {
         count++;
-        if (typeof candidate.encrypted_content !== "string" || !candidate.encrypted_content) {
-          throw new NativeCompactionError(
-            "invalid-response",
-            "Codex compaction item has no content.",
-          );
-        }
-        item = candidate;
+        // Refused once the response has ended, so its usage is read first.
+        if (typeof candidate.encrypted_content !== "string" || !candidate.encrypted_content) invalid = true;
+        else item = candidate;
       }
     } else if (type === "response.completed") {
       completed = (event.response as Json | undefined) ?? {};
       break;
     }
+  }
+  if (invalid) {
+    throw new NativeCompactionError("invalid-response", "Codex compaction item has no content.");
   }
   if (!completed || count !== 1 || !item) {
     throw new NativeCompactionError(
