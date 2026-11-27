@@ -298,15 +298,19 @@ page on any machine reads its own library and so shows every machine.
   and, on the bots' host, `bots/bots.sqlite`, both in the server's data
   folder. Every assistant response in them counts, a sub-agent's under the
   conversation that ran it, with what a conversation's own usage sums hold
-  beyond its responses, tokens and cost (Pi Durable's compaction summaries),
-  as one more, dated at its newest compaction. The bots keep each call they
-  make outside a conversation (thread titles, memory extraction, compaction)
-  in their store too, as the provider answers. A bot's chat is filed under its
-  chat on the machine that reads it, a seat's work under its Forum room, and
-  the Forum's own titles under the room. A store is read a page at a time.
+  beyond its responses, tokens and cost, as one more, dated at its newest
+  compaction. Pi Durable saves each of its compaction summary calls in its
+  store as it returns, counted at its own time, and what the sums hold beyond
+  those too. The bots keep each call they make outside a conversation (thread
+  titles, memory extraction, compaction) in their store too, as the provider
+  answers. A bot's chat is filed under its chat on the machine that reads it,
+  a seat's work under its Forum room, and the Forum's own titles under the
+  room. A store is read a page at a time, each from the place last saved.
   Bots that move to another machine take their store with them and the place
-  their old host had counted it to, and the new host counts what lies after
-  it; a purge reads the store first. A turn writes no usage of its own.
+  their old host had counted it to; neither host reads the store while they
+  move, and the new host counts what lies after that place once the move is
+  done. A purge reads the store first, and is refused when it cannot. A turn
+  writes no usage of its own.
 - Only counts leave a history: the harness, model, time, tokens by kind, the
   model calls, the cost when the harness records one, and the harness's own
   session identifier. No text, path or credential is read into the library.
