@@ -339,6 +339,11 @@ enum HistoryReader {
   /// The most one count may be.
   static let maximumCount = Library.maximumUsageCount
 
+  /// A count as a reader of another format takes it.
+  static func count(_ value: Any?) -> Int64 { integer(value) }
+  /// An amount, such as a cost, as a reader of another format takes it.
+  static func amount(_ value: Any?) -> Double? { number(value) }
+
   private static func integer(_ value: Any?) -> Int64 {
     guard let value = number(value) else { return 0 }
     return Int64(min(value, Double(maximumCount)))

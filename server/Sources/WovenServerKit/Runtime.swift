@@ -83,24 +83,6 @@ public struct Turn: Sendable, Hashable {
   }
 }
 
-/// Tokens a turn used, as a runtime without a history of its own (Pi
-/// Durable) reports them. Harnesses with one are counted from it instead.
-public struct TokenUsage: Sendable, Hashable {
-  public var model: String?
-  public var input: Int64
-  public var output: Int64
-  public var cacheRead: Int64
-  public var cacheWrite: Int64
-
-  public init(model: String? = nil, input: Int64, output: Int64, cacheRead: Int64 = 0, cacheWrite: Int64 = 0) {
-    self.model = model
-    self.input = input
-    self.output = output
-    self.cacheRead = cacheRead
-    self.cacheWrite = cacheWrite
-  }
-}
-
 /// What a runtime reports while its process runs. Events come in order on
 /// one stream for the life of the process, across turns. Output while no turn
 /// runs begins a turn the runtime started by itself, which the runtime ends
@@ -124,7 +106,7 @@ public enum RuntimeEvent: Sendable {
   /// The configuration changed (a model switch, new options, a mode change).
   case configuration(SessionConfiguration)
   /// The turn ended; `failure` says why when it failed.
-  case turnFinished(failure: String?, usage: TokenUsage?)
+  case turnFinished(failure: String?)
   /// The runtime lost the native session behind this chat.
   case nativeSessionGone
   /// The process ended. The next turn opens the session again.

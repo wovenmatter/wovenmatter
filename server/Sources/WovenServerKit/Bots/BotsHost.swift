@@ -58,6 +58,8 @@ actor BotsHost {
 
   let library: Library
   let peers: PeerSync
+  /// Run once the bots are stopped for a move to another machine.
+  nonisolated let handingOver = HandOverHook()
   private let interface: BotsHostInterface
   let tenure: BotsTenure
   let hosting: BotsHosting

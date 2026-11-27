@@ -226,6 +226,7 @@ extension BotsHost {
     hold = .sending(target: target)
     progress(target, .stopping)
     await reconcileHost()
+    await handingOver.run()
     var started = false
     do {
       progress(target, .exporting)

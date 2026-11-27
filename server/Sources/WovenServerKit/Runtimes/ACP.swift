@@ -442,7 +442,7 @@ actor ACPState {
     guard ownTurn, !turnRunning else { return }
     ownTurn = false
     closeActivity()
-    emit.yield(.turnFinished(failure: nil, usage: nil))
+    emit.yield(.turnFinished(failure: nil))
   }
 
   /// Ends whatever a turn left open.
@@ -470,11 +470,11 @@ actor ACPState {
       case "refusal": "The model declined to answer."
       default: nil
       }
-      emit.yield(.turnFinished(failure: failure, usage: Self.usage(value, model: configuration.model)))
+      emit.yield(.turnFinished(failure: failure))
     case .failure(let error as ACPError) where profile.isMissingSession(error):
       emit.yield(.nativeSessionGone)
     case .failure(let error):
-      emit.yield(.turnFinished(failure: "\(error)", usage: nil))
+      emit.yield(.turnFinished(failure: "\(error)"))
     }
   }
 
@@ -890,14 +890,6 @@ actor ACPState {
   private static func text(_ value: JSONValue) -> String {
     if case .string(let text) = value { return text }
     return (try? String(decoding: Wire.encoder.encode(value), as: UTF8.self)) ?? ""
-  }
-
-  /// The turn's usage in the prompt's reply, which Pi Durable gives.
-  private static func usage(_ result: JSONValue, model: String?) -> TokenUsage? {
-    let usage = result["usage"] ?? result["_meta"]?["usage"]
-    guard let usage, let input = usage["inputTokens"]?.int, let output = usage["outputTokens"]?.int else { return nil }
-    return TokenUsage(model: result["_meta"]?["model"]?.string ?? model, input: Int64(input), output: Int64(output),
-                      cacheRead: Int64(usage["cachedReadTokens"]?.int ?? 0), cacheWrite: Int64(usage["cachedWriteTokens"]?.int ?? 0))
   }
 
   /// A turn as ACP content blocks: images inline, text files embedded, other

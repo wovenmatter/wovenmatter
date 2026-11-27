@@ -59,24 +59,6 @@ public struct BotMirror: Sendable {
     }
   }
 
-  public struct Usage: Sendable {
-    public var model: String
-    public var input: Int64
-    public var output: Int64
-    public var cacheRead: Int64
-    public var cacheWrite: Int64
-    public var cost: Double
-
-    public init(model: String, input: Int64, output: Int64, cacheRead: Int64, cacheWrite: Int64, cost: Double) {
-      self.model = model
-      self.input = input
-      self.output = output
-      self.cacheRead = cacheRead
-      self.cacheWrite = cacheWrite
-      self.cost = cost
-    }
-  }
-
   public struct Item: Sendable {
     /// Stable forever: a resend carries the same id and is skipped.
     public var id: String
@@ -94,27 +76,10 @@ public struct BotMirror: Sendable {
     }
   }
 
-  /// One model turn's usage. Its id is the bot's and the entry's, the same on
-  /// every host, so a transfer never records a turn twice.
-  public struct UsageRecord: Sendable {
-    public var id: String
-    public var sessionID: String
-    public var createdAt: Date
-    public var usage: Usage
-
-    public init(id: String, sessionID: String, createdAt: Date, usage: Usage) {
-      self.id = id
-      self.sessionID = sessionID
-      self.createdAt = createdAt
-      self.usage = usage
-    }
-  }
-
   public var bot: Bot?
   public var chats: [Chat]
   /// In order; each session's items continue its sequence.
   public var items: [Item]
-  public var usage: [UsageRecord]
   /// `bot:<botId>` or `forum`.
   public var checkpoint: String
   /// The runtime's entries through this one are covered.
@@ -122,13 +87,12 @@ public struct BotMirror: Sendable {
   /// Further checkpoints the push covers (`seat:<botId>`: a bot's Forum seats).
   public var checkpoints: [String: Int64]
 
-  public init(bot: Bot?, chats: [Chat], items: [Item], usage: [UsageRecord] = [], checkpoint: String, upTo: Int64,
+  public init(bot: Bot?, chats: [Chat], items: [Item], checkpoint: String, upTo: Int64,
               checkpoints: [String: Int64] = [:]) {
     self.checkpoints = checkpoints
     self.bot = bot
     self.chats = chats
     self.items = items
-    self.usage = usage
     self.checkpoint = checkpoint
     self.upTo = upTo
   }
@@ -137,8 +101,8 @@ public struct BotMirror: Sendable {
 extension Library {
   /// Saves one push of the bots runtime: the bot's row, a session (runtime
   /// `bots`, owned by this machine) and `bot_chats` row for each chat that
-  /// lacks one, their titles and pinned flags, every item not stored yet with
-  /// its usage, and the checkpoint, all in one transaction. A chat whose
+  /// lacks one, their titles and pinned flags, every item not stored yet,
+  /// and the checkpoint, all in one transaction. A chat whose
   /// session the person deleted is left deleted, and its items are dropped.
   public func saveBotMirror(_ mirror: BotMirror) async throws {
     let machineID = machineID
@@ -153,15 +117,6 @@ extension Library {
         if try writer.row("session_items", item.id) != nil { continue }
         _ = try Self.putItem(id: item.id, sessionID: item.sessionID, content: item.content, author: item.author,
                              createdAt: item.createdAt, writer)
-      }
-      for record in mirror.usage where try writer.row("usage_records", record.id) == nil {
-        let usage = record.usage
-        try writer.put("usage_records", id: record.id, [
-          "machine_id": .text(machineID), "session_id": .text(record.sessionID), "runtime": .text(RuntimeKind.bots.rawValue),
-          "model": .text(usage.model), "input_tokens": .integer(usage.input), "output_tokens": .integer(usage.output),
-          "cache_read_tokens": .integer(usage.cacheRead), "cache_write_tokens": .integer(usage.cacheWrite),
-          "cost": .real(usage.cost), "recorded_at": .integer(Self.millis(record.createdAt)),
-        ])
       }
       for (key, entry) in [(mirror.checkpoint, mirror.upTo)] + mirror.checkpoints.map({ ($0.key, $0.value) }) {
         try writer.db.run("""
@@ -205,6 +160,9 @@ extension Library {
       "conversation_id": .integer(Int64(chat.conversationID)), "kind": .text(chat.kind.rawValue),
       "parent_conversation_id": parent.map { .integer(Int64($0)) } ?? .null,
     ], writer)
+    // Usage read from the bots' store before this chat was saved is filed under it now.
+    try publishSession(runtime: .bots, nativeSession: chat.botID.map { "\($0)/\(chat.conversationID)" } ?? "forum/\(chat.conversationID)",
+                       writer)
   }
 
   /// The start of the Forum post a thread starts from, as stored here.

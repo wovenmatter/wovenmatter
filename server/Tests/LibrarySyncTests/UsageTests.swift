@@ -3,36 +3,35 @@ import Testing
 import WovenLibrary
 import WovenProtocol
 
-/// Usage Woven Matter records itself (Pi Durable, bots) counts on every
-/// machine after sync. A harness that keeps its own history is counted only
-/// from what is read from that history, so a record of its runtime counts
-/// nothing.
-@Test func usageTotalsCoverEveryMachinesRecordsAfterSync() async throws {
+/// Usage every machine reads from its runtimes' own records counts on every
+/// machine after sync, with its sessions.
+@Test func usageTotalsCoverEveryMachinesUsageAfterSync() async throws {
   func library(_ name: String) async throws -> Library {
     try await Library.open(folder: FileManager.default.temporaryDirectory.appendingPathComponent("woven-usage-\(UUID().uuidString)"),
                            machineName: name)
   }
   let a = try await library("a"), b = try await library("b")
-  try await a.recordUsage(sessionID: "s1", runtime: .piDurable, model: "gpt", input: 100, output: 10, cacheRead: 5, cacheWrite: 0)
-  try await a.recordUsage(sessionID: "s1", runtime: .piDurable, model: "gpt", input: 50, output: 5, cacheRead: 0, cacheWrite: 0)
-  try await b.put("usage_records", id: "bot-turn", [
-    "machine_id": .text(b.machineID), "session_id": .text("s2"), "runtime": .text(RuntimeKind.bots.rawValue), "model": .text("claude"),
-    "input_tokens": .integer(7), "output_tokens": .integer(3), "cache_write_tokens": .integer(2),
-    "recorded_at": .integer(Int64(Date().timeIntervalSince1970 * 1000)),
-  ])
-  try await b.recordUsage(sessionID: "s3", runtime: .codex, model: "gpt", input: 1000, output: 1000, cacheRead: 0, cacheWrite: 0)
+  let now = Date()
+  try await a.saveUsage([
+    UsageEntry(id: "piDurable:r1", runtime: .piDurable, nativeSession: "s1", woven: true, model: "gpt", at: now,
+               input: 100, output: 10, cacheRead: 5),
+    UsageEntry(id: "piDurable:r2", runtime: .piDurable, nativeSession: "s1", woven: true, model: "gpt", at: now,
+               input: 50, output: 5),
+  ], source: UsageSource(id: "a"))
+  try await b.saveUsage([UsageEntry(id: "bots:r3", runtime: .bots, nativeSession: "bot/1", woven: true, model: "claude", at: now,
+                                    input: 7, output: 3, cacheWrite: 2)], source: UsageSource(id: "b"))
   while true {
     let page = try await a.pull(after: try await b.cursor(for: a.machineID), limit: 100)
     try await b.apply(page, from: a.machineID)
     if !page.more { break }
   }
 
-  let report = try await b.usage(from: Date().addingTimeInterval(-3600), to: Date().addingTimeInterval(60), periodSeconds: 3600)
+  let report = try await b.usage(from: now.addingTimeInterval(-3600), to: now.addingTimeInterval(60), periodSeconds: 3600)
   #expect(report.totals == UsageAmounts(input: 157, output: 18, cacheRead: 5, cacheWrite: 2, requests: 3))
   #expect(report.sessions == 2)
   #expect(Set(report.newestByMachine.keys) == [a.machineID, b.machineID])
   let fromA = report.groups.filter { $0.machineID == a.machineID }
-  #expect(fromA.reduce(0) { $0 + $1.amounts.input } == 150 && fromA.allSatisfy { $0.sessionID == "s1" })
+  #expect(fromA.reduce(0) { $0 + $1.amounts.input } == 150 && fromA.allSatisfy { $0.nativeSessionID == "s1" && $0.inWoven })
 }
 
 private func usageLibrary(_ name: String) async throws -> Library {

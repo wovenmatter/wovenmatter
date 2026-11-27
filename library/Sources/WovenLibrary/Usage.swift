@@ -5,12 +5,12 @@ import WovenProtocol
 // every machine without carrying every record.
 
 extension RuntimeKind {
-  /// The harness keeps its own history, and its usage is counted only from
-  /// there, inside Woven Matter or not, into `usage_hours`. A turn Woven
-  /// Matter runs with it writes no usage record of its own.
+  /// The runtime keeps its own record of what it did, and its usage is
+  /// counted only from there, inside Woven Matter or not, into
+  /// `usage_hours`. Every runtime does.
   public var usageFromHistory: Bool { Self.keepingHistory.contains(self) }
 
-  static let keepingHistory: [RuntimeKind] = [.codex, .claudeCode, .grokBuild, .openCode, .piCLI]
+  static let keepingHistory: [RuntimeKind] = [.codex, .claudeCode, .grokBuild, .openCode, .piCLI, .piDurable, .bots]
 }
 
 /// One model response found in a harness's own history: counts only.
@@ -114,17 +114,12 @@ extension Library {
     // response does, so days are exact where the zone's offset is whole hours.
     let period = Int64(calendar == nil ? seconds : 900) * 1000
     let range: [SQLValue] = [.integer(Self.millis(start)), .integer(Self.millis(end))]
-    let history = Self.historyRuntimes
     return try await read { db in
       let records = """
         WITH records AS (
           SELECT machine_id, session_id, native_session, woven, runtime, model, input_tokens, output_tokens,
             cache_read_tokens, cache_write_tokens, cost, requests, recorded_at
-          FROM usage_hours WHERE deleted = 0 AND requests > 0
-          UNION ALL
-          SELECT machine_id, session_id, native_session, woven, runtime, model, input_tokens, output_tokens,
-            cache_read_tokens, cache_write_tokens, cost, requests, recorded_at
-          FROM usage_records WHERE deleted = 0 AND runtime NOT IN (\(history)))
+          FROM usage_hours WHERE deleted = 0 AND requests > 0)
         """
       let sums = """
         SUM(input_tokens) AS input, SUM(output_tokens) AS output, SUM(cache_read_tokens) AS cache_read,
@@ -157,10 +152,6 @@ extension Library {
                          sessions: Int(total?.integer("sessions") ?? 0), newestByMachine: newest)
     }
   }
-
-  /// The runtimes counted from their histories, as an SQL list.
-  private static let historyRuntimes = RuntimeKind.keepingHistory
-    .map { "'" + $0.rawValue.replacingOccurrences(of: "'", with: "''") + "'" }.joined(separator: ", ")
 
   /// Quarter-hour groups folded into the calendar's days, each starting at
   /// its day's start, in the order of the day and then of the newest record.
@@ -316,6 +307,25 @@ extension Library {
     for hour in hours { _ = try publish(hour, writer) }
   }
 
+  /// The Woven Matter session a harness session's usage is filed under. A
+  /// bot's chat is `<bot>/<conversation>` and a Forum room `forum/<room>`,
+  /// as the bots' store names them; any other harness session is the one
+  /// `native_sessions` names. Several sessions can name one harness
+  /// session; the first by identifier is it.
+  private static func wovenSession(runtime: String, nativeSession: String, _ db: Connection) throws -> String? {
+    guard runtime == RuntimeKind.bots.rawValue else {
+      return try db.query("SELECT MIN(session_id) AS id FROM native_sessions WHERE runtime = ? AND handle = ?",
+                          [.text(runtime), .text(nativeSession)]).first?.text("id")
+    }
+    let parts = nativeSession.split(separator: "/", maxSplits: 1).map(String.init)
+    guard parts.count == 2, let conversation = Int64(parts[1]) else { return nil }
+    let bot = parts[0] == "forum" ? "" : parts[0]
+    return try db.query("""
+      SELECT MIN(c.session_id) AS id FROM bot_chats c JOIN sessions s ON s.id = c.session_id
+      WHERE c.bot_id = ? AND c.conversation_id = ? AND c.deleted = 0 AND s.deleted = 0
+      """, [.text(bot), .integer(conversation)]).first?.text("id")
+  }
+
   /// Writes the synced row of one group from the ledger, unless it already
   /// holds exactly that. Returns whether it wrote.
   private static func publish(_ group: UsageHour, _ writer: Writer) throws -> Bool {
@@ -330,9 +340,7 @@ extension Library {
     // A group whose responses all moved to an earlier observation's group,
     // or were found to restate others, is kept with nothing in it.
     let empty = sums["latest"] == .null
-    // Several Woven Matter sessions can name one harness session; the first by identifier is it.
-    let session = try db.query("SELECT MIN(session_id) AS id FROM native_sessions WHERE runtime = ? AND handle = ?",
-                               [.text(group.runtime), .text(group.nativeSession)]).first?.text("id")
+    let session = try wovenSession(runtime: group.runtime, nativeSession: group.nativeSession, db)
     let cost: Double = switch sums["cost"] {
     case .real(let value): value
     case .integer(let value): Double(value)

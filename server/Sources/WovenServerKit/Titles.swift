@@ -20,6 +20,15 @@ final class HistoryTurnHook: Sendable {
   func tell() { action.withLock { $0 }?() }
 }
 
+/// Told, and waited for, before the bots leave this machine, so their
+/// usage is read while their store is still here.
+final class HandOverHook: Sendable {
+  private let action = Mutex<(@Sendable () async -> Void)?>(nil)
+
+  func set(_ value: @escaping @Sendable () async -> Void) { action.withLock { $0 = value } }
+  func run() async { await action.withLock { $0 }?() }
+}
+
 /// Names a new chat from the person's first message, the same way for every
 /// runtime: when `titles.enabled` is set, a throwaway native session of the
 /// title runtime (Codex, with `titles.model` and `titles.thinking`) is asked

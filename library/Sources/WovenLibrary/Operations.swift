@@ -334,6 +334,16 @@ extension Library {
     }
   }
 
+  /// When a setting was last written, by any machine, with its value.
+  public func settingWritten(_ key: String) async throws -> (value: JSONValue, at: Date)? {
+    try await read { db in
+      guard let row = try db.query("SELECT id, value, stamp FROM settings WHERE id = ? AND deleted = 0 AND value != 'null'",
+                                   [.text(key)]).first,
+            let stamp = Stamp(text: row.text("stamp") ?? "") else { return nil }
+      return (try Self.setting(row).value, Date(timeIntervalSince1970: Double(stamp.time) / 1000))
+    }
+  }
+
   /// Sets a setting everywhere; setting `null` unsets it.
   @discardableResult
   public func setSetting(_ key: String, to value: JSONValue) async throws -> Setting {
@@ -476,22 +486,6 @@ extension Library {
   private static func setting(_ row: Row) throws -> Setting {
     Setting(key: row.text("id") ?? "",
             value: try Wire.decoder.decode(JSONValue.self, from: Data((row.text("value") ?? "null").utf8)))
-  }
-}
-
-// MARK: Usage
-
-extension Library {
-  /// Writes one usage record for a finished turn of a session on this
-  /// machine, for a runtime without a history of its own (Pi Durable).
-  public func recordUsage(sessionID: String?, runtime: RuntimeKind, model: String, input: Int64, output: Int64,
-                          cacheRead: Int64, cacheWrite: Int64) async throws {
-    try await put("usage_records", id: UUID().uuidString.lowercased(), [
-      "machine_id": .text(machineID), "session_id": sessionID.map(SQLValue.text) ?? .null, "runtime": .text(runtime.rawValue),
-      "model": .text(model), "input_tokens": .integer(input), "output_tokens": .integer(output),
-      "cache_read_tokens": .integer(cacheRead), "cache_write_tokens": .integer(cacheWrite),
-      "recorded_at": .integer(Writer.now()),
-    ])
   }
 }
 

@@ -284,7 +284,7 @@ struct OpenCodeProjection: Sendable {
     nestedErrors.removeAll()
     questionDismissed = false
     OpenCodeToolFailures.shared.forget(session: session)
-    events.append(.turnFinished(failure: failure, usage: nil))
+    events.append(.turnFinished(failure: failure))
     stepFailure = nil
     endedMessages.insert(contentsOf: turnMessages)
     endedCalls.insert(contentsOf: turnCalls)

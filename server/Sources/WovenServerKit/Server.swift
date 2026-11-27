@@ -153,8 +153,17 @@ public final class WovenServer: Sendable {
     registerServerControl(&routes, library: library, sessions: sessions, peers: peers, tailnet: options.tailnet,
                           dataFolder: options.dataFolder, instance: options.instance, install: install)
     let keepAwake = KeepAwake(library: library)
-    let usage = options.harnessHome.map { UsageScanner(library: library, home: $0, environment: ProcessInfo.processInfo.environment) }
-    if let usage { sessions.historyTurns.set { Task { await usage.nudge() } } }
+    let stores: [(kind: PiStoreKind, url: URL)] = [
+      (.piDurable, options.dataFolder.appendingPathComponent("pi-durable/pi-durable.sqlite")),
+      (.bots, options.dataFolder.appendingPathComponent("bots/bots.sqlite")),
+    ]
+    let usage = options.harnessHome.map {
+      UsageScanner(library: library, home: $0, environment: ProcessInfo.processInfo.environment, stores: stores)
+    }
+    if let usage {
+      sessions.historyTurns.set { Task { await usage.nudge() } }
+      bots.handingOver.set { await usage.readStores(.bots) }
+    }
     let analytics = Analytics(library: library,
                               delivery: options.analyticsDelivery ?? (options.sendsAnalytics ? PostHogDelivery() : nil),
                               appVersion: options.appVersion, settled: { await peers.firstRoundDone })

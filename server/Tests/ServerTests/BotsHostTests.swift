@@ -290,8 +290,7 @@ func mirrorPushIsSavedOnceWithItsCheckpoint() async throws {
      "items": [
        {"key": "3", "conversationId": 1, "createdAt": 1000, "kind": "user", "text": "Hello",
         "from": {"name": "Build", "sessionId": "s-1"}},
-       {"key": "4", "conversationId": 1, "createdAt": 2000, "kind": "assistant", "text": "Hi",
-        "usage": {"model": "p/m", "input": 10, "output": 5, "cacheRead": 0, "cacheWrite": 0, "cost": 0.01}},
+       {"key": "4", "conversationId": 1, "createdAt": 2000, "kind": "assistant", "text": "Hi"},
        {"key": "4.1", "conversationId": 1, "createdAt": 2001, "kind": "thinking", "text": "Look first."},
        {"key": "4.2", "conversationId": 1, "createdAt": 2002, "kind": "tool",
         "tool": {"name": "bash", "input": "ls", "output": "\(long)", "failed": false}}],
@@ -404,9 +403,8 @@ func anotherServerSendsUIsToTheHostAndForwardsCalls() async throws {
 // MARK: Transfer
 
 /// Two linked servers; the first is the bots' host, its stand-in runtime
-/// holding one bot with a chat, a turn's usage, a Forum post, a visual reply
-/// it published in the Forum (its HTML in the first server's content store),
-/// a Forum turn's usage, and files.
+/// holding one bot with a chat, a Forum post, a visual reply it published in
+/// the Forum (its HTML in the first server's content store), and files.
 private struct TransferSetup {
   static let visualReplyHTML = Data("<h1>Build times</h1>".utf8)
   let a: TestServer, b: TestServer
@@ -435,8 +433,7 @@ private struct TransferSetup {
          "conversations": [{"conversationId": 1, "kind": "main", "createdAt": "2026-11-01T10:00:00.000Z"}],
          "items": [
            {"key": "3", "conversationId": 1, "createdAt": 1000, "kind": "user", "text": "Hello"},
-           {"key": "4", "conversationId": 1, "createdAt": 2000, "kind": "assistant", "text": "Hi",
-            "usage": {"model": "p/m", "input": 10, "output": 5, "cacheRead": 0, "cacheWrite": 0, "cost": 0.01}}],
+           {"key": "4", "conversationId": 1, "createdAt": 2000, "kind": "assistant", "text": "Hi"}],
          "upTo": 4}},
        {"method": "mirror.forum", "params": {
          "rooms": [{"roomId": 1, "createdAt": "2026-11-01T10:00:00.000Z"}],
@@ -445,8 +442,6 @@ private struct TransferSetup {
                     "visualReply": {"title": "Build times", "height": 320, "digest": "\(digest)", "size": 20}, "createdAt": 3100}],
          "seatItems": [{"botId": "b1", "name": "Ada", "item": {"key": "6", "conversationId": 1, "createdAt": 3050, "kind": "tool",
                         "tool": {"name": "bash", "input": "ls", "output": "a", "failed": false}}}],
-         "seatUsage": [{"botId": "b1", "key": "6", "roomId": 1, "createdAt": 3050,
-                        "usage": {"model": "p/m", "input": 7, "output": 2, "cacheRead": 0, "cacheWrite": 0, "cost": 0.01}}],
          "seats": {"b1": 6},
          "upTo": 8}}]
       """.utf8).write(to: bots.appendingPathComponent("bots.json"))
@@ -503,10 +498,6 @@ func transferMovesTheBotsAndSwitchesTheHostWithNothingTwice() async throws {
     let main = try #require(try await client.call(ListSavedBots()).chats.first { $0.kind == .main })
     #expect(try await client.call(SessionItems(sessionID: main.session.id)).count == 2)
     #expect(main.session.archived && main.session.folderID == "f1")
-  }
-  for server in [a, b] {
-    let usage = try await server.server.library.usage(from: .distantPast, to: .distantFuture, periodSeconds: 86400)
-    #expect(usage.totals.requests == 2)
   }
   // The Forum's visual reply is one small item on both, and its HTML came to the new host.
   let digest = Library.digest(of: TransferSetup.visualReplyHTML)

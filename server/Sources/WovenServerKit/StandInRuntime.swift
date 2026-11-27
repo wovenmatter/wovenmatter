@@ -160,7 +160,7 @@ private final class StandInSession: RuntimeSession {
           calls: [ToolCall(name: "woven." + name, input: arguments, output: result.failed ? result.text : "",
                            failed: result.failed)]), finished: true))
         self.toolRound.withLock { $0 = nil }
-        emit.yield(.turnFinished(failure: nil, usage: nil))
+        emit.yield(.turnFinished(failure: nil))
       } }
       return
     }
@@ -183,11 +183,11 @@ private final class StandInSession: RuntimeSession {
       emit.yield(.tool(callID: "echo-\(number)", call: ToolCall(name: "echo", input: "{\"text\":\"\(text)\"}", output: text),
                        finished: true))
       self.steered.withLock { $0 = nil }
-      emit.yield(.turnFinished(failure: nil, usage: TokenUsage(model: "stand-in", input: 10, output: 5)))
+      emit.yield(.turnFinished(failure: nil))
       guard text.hasPrefix("then ") else { return }
       emit.yield(.text("On my own: \(text)"))
       emit.yield(.messageFinished)
-      emit.yield(.turnFinished(failure: nil, usage: nil))
+      emit.yield(.turnFinished(failure: nil))
     }
     turn.withLock { $0 = task }
   }
@@ -214,12 +214,12 @@ private final class StandInSession: RuntimeSession {
       name: "question", input: "{}", kind: .question,
       questions: [ToolQuestion(title: "Colour", text: "Which colour?", options: ["Red", "Blue"], answer: answered)]), finished: true))
     if case .declined = answer {
-      emit.yield(.turnFinished(failure: nil, usage: nil))
+      emit.yield(.turnFinished(failure: nil))
       return
     }
     emit.yield(.text("You answered."))
     emit.yield(.messageFinished)
-    emit.yield(.turnFinished(failure: nil, usage: nil))
+    emit.yield(.turnFinished(failure: nil))
   }
 
   /// One MCP `tools/call` over the tool socket: the key, then the request.
@@ -270,7 +270,7 @@ private final class StandInSession: RuntimeSession {
   func interrupt() async throws {
     turn.withLock { $0?.cancel() }
     steered.withLock { $0 = nil }
-    emit.yield(.turnFinished(failure: nil, usage: nil))
+    emit.yield(.turnFinished(failure: nil))
   }
 
   func stop() async {

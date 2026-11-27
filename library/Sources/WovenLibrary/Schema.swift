@@ -303,30 +303,8 @@ public enum Schema {
       .text("author"),
       .integer("created_at", 0),
     ], parents: [Parent(column: "session_id", table: "sessions")], indexes: [["session_id", "sequence"]]),
-    // Usage Woven Matter records itself, on the machine that wrote it: Pi
-    // Durable writes one row per turn and bots one per model turn. A harness
-    // that keeps its own history is counted from `usage_hours` instead.
-    Table("usage_records", .appendOnly, [
-      .text("machine_id", ""),
-      // The Woven Matter session, when the usage was one.
-      .text("session_id"),
-      // The harness's own session identifier, for usage read from its history.
-      .text("native_session"),
-      // Made inside Woven Matter.
-      .integer("woven", 1),
-      .text("runtime", ""),
-      .text("model", ""),
-      .integer("input_tokens", 0),
-      .integer("output_tokens", 0),
-      .integer("cache_read_tokens", 0),
-      .integer("cache_write_tokens", 0),
-      .real("cost", 0),
-      .integer("requests", 1),
-      // The newest response the row counts.
-      .integer("recorded_at", 0),
-    ], indexes: [["recorded_at"]]),
-    // Usage read from a harness's own history (Codex, Claude Code, Grok
-    // Build, OpenCode, the Pi CLI): one row per machine, harness session,
+    // Usage read from each runtime's own record (Codex, Claude Code, Grok
+    // Build, OpenCode, the Pi CLI, Pi Durable, bots): one row per machine, harness session,
     // model, hour and whether the history says Woven Matter made it, holding
     // the sums of that machine's `usage_responses` in the group. Only the
     // owning machine writes its rows, and rewrites one whenever its sums

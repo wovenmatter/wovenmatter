@@ -32,6 +32,8 @@ actor UsageScanner {
   private let library: Library
   private let home: URL
   private let environment: [String: String]
+  /// Pi Durable's and the bots' stores in this server's data folder.
+  private let stores: [(kind: PiStoreKind, url: URL)]
   private let chunk: Int
   private let slice: Duration
   /// The time gone by, for the slice and the schedule, and a wait that
@@ -51,13 +53,15 @@ actor UsageScanner {
   /// `environment` is the server's own, for the homes it names; `chunk` the
   /// most of a history read and saved in one step; `slice` how long one pass
   /// reads before it ends, by `clock`.
-  init(library: Library, home: URL, environment: [String: String] = [:], chunk: Int = 64 * 1024 * 1024,
+  init(library: Library, home: URL, environment: [String: String] = [:], stores: [(kind: PiStoreKind, url: URL)] = [],
+       chunk: Int = 64 * 1024 * 1024,
        slice: Duration = .seconds(20), willRead: (@Sendable (String) async -> Void)? = nil,
        clock: (@Sendable () -> Duration)? = nil, sleep: (@Sendable (Duration) async -> Void)? = nil,
        log: @escaping @Sendable (String) -> Void = { FileHandle.standardOutput.write(Data(("woven-server: " + $0 + "\n").utf8)) }) {
     self.library = library
     self.home = home
     self.environment = environment
+    self.stores = stores
     self.chunk = max(chunk, 1)
     self.slice = slice
     let origin = ContinuousClock.now
@@ -162,11 +166,13 @@ actor UsageScanner {
   private enum History {
     case file(HistoryFile)
     case openCode(path: String, source: String)
+    case store(path: String, source: String, kind: PiStoreKind)
 
     var source: String {
       switch self {
       case .file(let file): file.source
       case .openCode(_, let source): source
+      case .store(_, let source, _): source
       }
     }
   }
@@ -196,7 +202,7 @@ actor UsageScanner {
       case .file(let file):
         guard let attributes = try? FileManager.default.attributesOfItem(atPath: file.url.path) else { continue }
         (size, modified) = Self.stat(attributes)
-      case .openCode(let path, _):
+      case .openCode(let path, _), .store(let path, _, _):
         guard FileManager.default.fileExists(atPath: path) else { continue }
         var total: Int64 = 0, newest: Int64 = 0
         for file in [path, path + "-wal"] {
@@ -294,6 +300,8 @@ actor UsageScanner {
     switch item.history {
     case .file(let file):
       try await read(file, size: item.size, modified: item.modified, known: known, deadline: deadline, into: &pass)
+    case .store(let path, let source, let kind):
+      try await readStore(path, source: source, kind: kind, size: item.size, modified: item.modified, known: known, into: &pass)
     case .openCode(let path, let source):
       try await readOpenCode(path, source: source, size: item.size, modified: item.modified, known: known,
                              deadline: deadline, into: &pass)
@@ -359,6 +367,9 @@ actor UsageScanner {
     }
 
     let openCode = home.appendingPathComponent(".local/share/opencode/opencode.db")
+    for store in stores {
+      histories.append(.store(path: store.url.path, source: Self.source(store.kind.runtime.rawValue, store.url.path), kind: store.kind))
+    }
     histories.append(.openCode(path: openCode.path, source: Self.openCodeSource))
     if let configured = extra("XDG_DATA_HOME", "opencode/opencode.db", default: openCode) {
       histories.append(.openCode(path: configured.path, source: Self.source("opencode", configured.path)))
@@ -796,6 +807,61 @@ actor UsageScanner {
     /// The end of a finished stream: what there is is its first line.
     mutating func finish() {
       if identity == nil { identity = "head:" + Library.digest(of: Data(head)) }
+    }
+  }
+
+  // MARK: Pi Durable and bots
+
+  /// A Pi Durable store is read on from its place in each table set, which
+  /// must still be there; one replaced is read again. It is read whole in
+  /// one step.
+  private func readStore(_ path: String, source: String, kind: PiStoreKind, size: Int64, modified: Int64, known: UsageSource?,
+                         into pass: inout Pass) async throws -> Bool {
+    guard let counted = try await begin(known, id: source, size: size, modified: modified) else { return true }
+    do {
+      let database = try ReadOnlyDatabase(path: path)
+      var place = PiStorePlace()
+      if let known, known.boundary == Self.start, let saved = try? JSONDecoder().decode(PiStorePlace.self, from: Data(known.state.utf8)) {
+        place = saved
+      }
+      // The bots' store moves with them: what it holds from before this
+      // machine became their host was counted by the host it was on then.
+      var since: Date?
+      if kind == .bots {
+        guard let host = try await library.settingWritten(botsHostSetting), host.value.string == library.machineID else {
+          try await library.saveUsage([], source: UsageSource(id: source, size: size, modified: modified, boundary: Self.start,
+                                                              state: counted.state))
+          return true
+        }
+        since = host.at
+      }
+      let read = try PiStoreReader.read(database, kind: kind, after: place, since: since)
+      let next = UsageSource(id: source, size: size, modified: modified, boundary: Self.start, state: try Self.encode(read.place))
+      try await commit(read.entries, next, into: &pass)
+      pass.read += 1
+    } catch {
+      try await passOver(counted, size: size, modified: modified)
+    }
+    return true
+  }
+
+  /// Reads the stores of `kind` at once, outside the passes: the bots' just
+  /// before they move to another machine.
+  func readStores(_ kind: PiStoreKind) async {
+    var pass = Pass()
+    let sources = (try? await library.usageSources()) ?? [:]
+    for store in stores where store.kind == kind {
+      let path = store.url.path
+      guard FileManager.default.fileExists(atPath: path) else { continue }
+      var size: Int64 = 0, modified: Int64 = 0
+      for file in [path, path + "-wal"] {
+        guard let attributes = try? FileManager.default.attributesOfItem(atPath: file) else { continue }
+        let (fileSize, fileModified) = Self.stat(attributes)
+        size += fileSize
+        modified = max(modified, fileModified)
+      }
+      let source = Self.source(kind.runtime.rawValue, path)
+      _ = try? await readStore(path, source: source, kind: kind, size: size, modified: modified, known: sources[source], into: &pass)
     }
   }
 
