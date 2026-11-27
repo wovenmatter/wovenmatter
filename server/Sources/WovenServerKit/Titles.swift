@@ -25,16 +25,23 @@ final class HistoryTurnHook: Sendable {
 /// machine they move to, takes that place over before the store arrives.
 final class BotsUsageHook: Sendable {
   struct Actions: Sendable {
-    var read: @Sendable () async -> Void
-    var place: @Sendable () async -> String?
+    /// Reads the store to its end; whether it could.
+    var read: @Sendable () async -> Bool
+    /// Stops reading the store while the bots move, and says where it was read to.
+    var hold: @Sendable () async -> String?
+    /// Reads the store again once a move has ended, either way.
+    var release: @Sendable () async -> Void
+    /// Takes over the place a move brought, before the store is here.
     var install: @Sendable (String?) async throws -> Void
   }
 
   private let actions = Mutex<Actions?>(nil)
 
   func set(_ value: Actions) { actions.withLock { $0 = value } }
-  func read() async { await actions.withLock { $0 }?.read() }
-  func place() async -> String? { await actions.withLock { $0 }?.place() }
+  /// With nothing counting usage on this machine there is nothing to read.
+  func read() async -> Bool { await actions.withLock { $0 }?.read() ?? true }
+  func hold() async -> String? { await actions.withLock { $0 }?.hold() }
+  func release() async { await actions.withLock { $0 }?.release() }
   func install(_ place: String?) async throws { try await actions.withLock { $0 }?.install(place) }
 }
 

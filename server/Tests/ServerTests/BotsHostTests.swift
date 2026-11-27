@@ -342,10 +342,26 @@ func aPurgeReadsTheBotsUsageFirst() async throws {
   let reads = Mutex<[Bool]>([])
   host.server.bots.usage.set(BotsUsageHook.Actions(read: {
     reads.withLock { $0.append(runtime.received.contains { $0["type"]?.string == "bots.purge" }) }
-  }, place: { nil }, install: { _ in }))
+    return true
+  }, hold: { nil }, release: {}, install: { _ in }))
   _ = try await client.call(BotsCall(request: json(#"{"type": "bots.purge", "botId": "b1"}"#)))
   #expect(reads.withLock { $0 } == [false])
   #expect(runtime.received.contains { $0["type"]?.string == "bots.purge" })
+}
+
+/// A purge whose read of the bots' store fails is refused, to be tried again.
+@Test(.timeLimit(.minutes(1)))
+func aPurgeWhoseUsageCannotBeReadIsRefused() async throws {
+  let runtime = StandInBotsRuntime()
+  let host = try await TestServer.start(name: "Studio", runtime: runtime)
+  defer { host.finishLater() }
+  let client = try await host.connect()
+  try await host.makeHost(client, runtime)
+  host.server.bots.usage.set(BotsUsageHook.Actions(read: { false }, hold: { nil }, release: {}, install: { _ in }))
+  await #expect(throws: (any Error).self) {
+    _ = try await client.call(BotsCall(request: json(#"{"type": "bots.purge", "botId": "b1"}"#)))
+  }
+  #expect(!runtime.received.contains { $0["type"]?.string == "bots.purge" })
 }
 
 @Test(.timeLimit(.minutes(1)))
@@ -496,15 +512,20 @@ func transferMovesTheBotsAndSwitchesTheHostWithNothingTwice() async throws {
 
   // Where the old host had counted the bots' store to goes with them, and is
   // taken over before the store is in place.
+  // Neither host reads the store again until the move is done.
   let installed = Mutex<[String?]>([])
-  a.server.bots.usage.set(BotsUsageHook.Actions(read: {}, place: { "counted to here" }, install: { _ in }))
+  let released = Mutex<[String]>([])
+  a.server.bots.usage.set(BotsUsageHook.Actions(read: { true }, hold: { "counted to here" },
+                                                release: { released.withLock { $0.append("a") } }, install: { _ in }))
   let storeFile = b.folder.appendingPathComponent("bots/bots.json").path
-  b.server.bots.usage.set(BotsUsageHook.Actions(read: {}, place: { nil }, install: { place in
+  b.server.bots.usage.set(BotsUsageHook.Actions(read: { true }, hold: { nil }, release: { released.withLock { $0.append("b") } },
+                                                install: { place in
     #expect(!FileManager.default.fileExists(atPath: storeFile))
     installed.withLock { $0.append(place) }
   }))
   _ = try await setup.onA.call(TransferBots(targetMachineID: b.server.machineID))
   #expect(installed.withLock { $0 } == ["counted to here"])
+  #expect(released.withLock { $0 }.sorted() == ["a", "b"])
 
   // The folder and the files moved, the host switched, and the old copy is gone.
   #expect(FileManager.default.contents(atPath: b.folder.appendingPathComponent("bots/bots.json").path) != nil)

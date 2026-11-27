@@ -207,7 +207,13 @@ extension BotsHost {
     let work = Task { try await self.sendBots(id, to: target, client: client) }
     outgoing = work
     defer { outgoing = nil }
-    try await work.value
+    do {
+      try await work.value
+    } catch {
+      await usage.release()
+      throw error
+    }
+    await usage.release()
   }
 
   private func progress(_ target: String, _ phase: BotsTransferPhase, sent: Int64? = nil, total: Int64? = nil,
@@ -235,9 +241,9 @@ extension BotsHost {
       try await hosting.files.run(.export, configURL, archives)
       let expected = try await library.botsTransferExpected()
       // The bots are stopped: their store is read to its end where it can be,
-      // and the new host counts what lies after the place handed over.
-      await usage.read()
-      let place = await usage.place()
+      // then not read here again while they move; the new host counts what
+      // lies after the place handed over.
+      let place = await usage.hold()
       let files = try Self.listFiles(in: botsFolder, as: "bots") + Self.listFiles(in: archives, as: "files")
       let total = files.reduce(0) { $0 + $1.size }
       progress(target, .copying, sent: 0, total: total)
@@ -597,6 +603,7 @@ extension BotsHost {
     remove(incomingFolder)
     remove(incomingMarker)
     hold = nil
+    await usage.release()
     await reconcileHost()
   }
 
@@ -655,6 +662,7 @@ extension BotsHost {
     if transfer.work != nil { await removeReceived() } else { await releaseEngine() }
     remove(incomingFolder)
     remove(incomingMarker)
+    await usage.release()
   }
 
   /// The received bots folder, anything read into this engine, and any chat

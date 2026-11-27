@@ -162,8 +162,8 @@ public final class WovenServer: Sendable {
     }
     if let usage {
       sessions.historyTurns.set { Task { await usage.nudge() } }
-      bots.usage.set(BotsUsageHook.Actions(read: { await usage.readStores(.bots) }, place: { await usage.botsPlace() },
-                                           install: { try await usage.installBotsPlace($0) }))
+      bots.usage.set(BotsUsageHook.Actions(read: { await usage.readStores(.bots) }, hold: { await usage.holdBots(limit: .seconds(30)) },
+                                           release: { await usage.releaseBots() }, install: { try await usage.installBotsPlace($0) }))
     }
     let analytics = Analytics(library: library,
                               delivery: options.analyticsDelivery ?? (options.sendsAnalytics ? PostHogDelivery() : nil),

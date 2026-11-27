@@ -536,8 +536,10 @@ actor BotsHost {
       throw ProtocolError(.badRequest, "\(type ?? "") goes through SubscribeBots.")
     }
     if hostID == thisMachine {
-      // A purge drops the bot's tables: what they hold is counted first.
-      if type == "bots.purge" { await usage.read() }
+      // A purge drops the bot's tables: what they hold is counted first, or the purge waits.
+      if type == "bots.purge", !(await usage.read()) {
+        throw ProtocolError(.failed, "The bot's usage could not be counted before it is purged. Try again.")
+      }
       return try await withCheckedThrowingContinuation { continuation in
         do { try send(request, .call(continuation)) } catch { continuation.resume(throwing: error) }
       }

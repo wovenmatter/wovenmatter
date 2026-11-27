@@ -164,9 +164,11 @@ private func botUsage(_ database: DatabaseFile, bot: String, conversation: Int, 
 }
 
 /// Bots that move to another machine take their store with them and the
-/// place the old host had read it to: the new host counts only what lies
-/// after it, also a reply written after the old host's last read. A move
-/// that fails leaves the old host's place as it was.
+/// place the old host had read it to, after one last read: the new host
+/// counts only what lies after it, also a reply written after that read.
+/// Neither host reads the store while the move is under way, so a pass
+/// racing it counts nothing twice. A move that fails leaves the old host
+/// reading on from its place.
 @Test func movedBotsAreCountedOnceAcrossTheirHosts() async throws {
   let url = try temporary("bots-data").appendingPathComponent("bots/bots.sqlite")
   let database = try botsStore(url)
@@ -175,12 +177,16 @@ private func botUsage(_ database: DatabaseFile, bot: String, conversation: Int, 
   let oldScanner = UsageScanner(library: old, home: try temporary("usage-home"), stores: [(.bots, url)])
   _ = try database.execute("INSERT INTO bot_b1_entries VALUES \(assistant(10, at: at, input: 10, output: 1));")
   await oldScanner.scan()
-  // Written after the old host's last read, before the move.
+  // The last read takes in what was written before the move.
   _ = try database.execute("INSERT INTO bot_b1_entries VALUES \(assistant(11, at: at, input: 20, output: 1));")
-  let place = await oldScanner.botsPlace()
+  let place = await oldScanner.holdBots(limit: .seconds(30))
   #expect(place != nil)
+  #expect(try await totals(old).totals.input == 30)
+  // Written after the old host's last read, before the move ends; a pass on the old host leaves it.
+  _ = try database.execute("INSERT INTO bot_b1_entries VALUES \(assistant(12, at: at, input: 40, output: 1));")
+  #expect(await oldScanner.scan().added == 0)
 
-  // The store reaches the new host at another path, after its place.
+  // The store reaches the new host at another path, after its place; it is read once the move is done.
   let moved = try temporary("bots-moved").appendingPathComponent("bots/bots.sqlite")
   let new = try await Library.open(folder: try temporary("usage-library"), machineName: "new")
   let newScanner = UsageScanner(library: new, home: try temporary("usage-home"), stores: [(.bots, moved)])
@@ -189,14 +195,16 @@ private func botUsage(_ database: DatabaseFile, bot: String, conversation: Int, 
   for suffix in ["", "-wal", "-shm"] where FileManager.default.fileExists(atPath: url.path + suffix) {
     try FileManager.default.copyItem(atPath: url.path + suffix, toPath: moved.path + suffix)
   }
+  #expect(await newScanner.scan().added == 0)
+  await newScanner.releaseBots()
   #expect(await newScanner.scan().added == 1)
   let newInput = try await totals(new).totals.input, oldInput = try await totals(old).totals.input
-  #expect(newInput == 20 && oldInput == 10)
+  #expect(newInput == 40 && oldInput == 30)
 
   // Had the move failed, the old host reads on from where it was.
-  _ = try database.execute("INSERT INTO bot_b1_entries VALUES \(assistant(12, at: at, input: 30, output: 1));")
-  #expect(await oldScanner.scan().added == 2)
-  #expect(try await totals(old).totals.input == 60)
+  await oldScanner.releaseBots()
+  #expect(await oldScanner.scan().added == 1)
+  #expect(try await totals(old).totals.input == 70)
 }
 
 /// Pi Durable saves each of its summariser's calls in the store, counted at
@@ -252,4 +260,35 @@ private func botUsage(_ database: DatabaseFile, bot: String, conversation: Int, 
   var passes = 1
   while passes < 20, await scanner.scan().left > 0 { passes += 1 }
   #expect(try await totals(library).totals.requests == 30)
+}
+
+/// A store read part-way early in a pass and again later in it goes on from
+/// the page it last saved, reading nothing twice.
+@Test func aStoreReadTwiceInOnePassGoesOnFromItsLastPage() async throws {
+  let url = try temporary("bots-data").appendingPathComponent("bots/bots.sqlite")
+  let database = try botsStore(url)
+  let at = Int64(1_767_610_800_000)
+  _ = try database.execute("INSERT INTO bot_b1_entries VALUES \(assistant(10, at: at, input: 1, output: 1));")
+  let other = try temporary("pi-data").appendingPathComponent("pi-durable/pi-durable.sqlite")
+  let library = try await Library.open(folder: try temporary("usage-library"), machineName: "a")
+  let ticks = Mutex(0)
+  let scanner = UsageScanner(library: library, home: try temporary("usage-home"), stores: [(.bots, url), (.piDurable, other)],
+                             storePage: 4, slice: .seconds(12), clock: { ticks.withLock { $0 += 1; return .seconds($0) } })
+  #expect(await scanner.scan().added == 1)
+  // The bots' store, read before, is a tail; the new Pi Durable store waits behind it.
+  _ = try database.execute("INSERT INTO bot_b1_entries VALUES "
+    + (11..<41).map { assistant($0, at: at, input: 1, output: 1) }.joined(separator: ", ") + ";")
+  try FileManager.default.createDirectory(at: other.deletingLastPathComponent(), withIntermediateDirectories: true)
+  try DatabaseFile.create(at: other)
+  let pi = try DatabaseFile(url: other, isCopy: false)
+  try tableSet(pi, prefix: "s0b1c2d3e4f5046178899aabbccddeeff_")
+  _ = try pi.execute("INSERT INTO s0b1c2d3e4f5046178899aabbccddeeff_entries VALUES \(assistant(3, at: at, input: 1, output: 1));")
+  var found = 0, added = 0
+  for _ in 0..<20 {
+    let pass = await scanner.scan()
+    found += pass.found
+    added += pass.added
+    if pass.left == 0 { break }
+  }
+  #expect(added == 31 && found == added)
 }

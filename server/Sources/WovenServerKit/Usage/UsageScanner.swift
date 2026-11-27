@@ -819,8 +819,19 @@ actor UsageScanner {
   /// a time, each page at one moment of the store and saved with its place,
   /// until the read reaches its end or the slice is used up.
   private func readStore(_ path: String, source: String, kind: PiStoreKind, size: Int64, modified: Int64, known: UsageSource?,
-                         deadline: Duration? = nil, into pass: inout Pass) async throws -> Bool {
-    guard let counted = try await begin(known, id: source, size: size, modified: modified) else { return true }
+                         deadline: Duration? = nil, failing: Bool = false, into pass: inout Pass) async throws -> Bool {
+    if kind == .bots {
+      // While the bots move, only the hold's own read is left.
+      guard !botsHeld || failing else { return true }
+      readingBots += 1
+    }
+    defer { if kind == .bots { readingBots -= 1 } }
+    // The place as last saved, which a read since this pass began may have moved.
+    let known = try await library.usageSources()[source] ?? known
+    guard let counted = try await begin(known, id: source, size: size, modified: modified) else {
+      if failing { throw RuntimeError.failed("The store was passed over.") }
+      return true
+    }
     var saved = counted
     do {
       let database = try ReadOnlyDatabase(path: path)
@@ -843,6 +854,7 @@ actor UsageScanner {
       }
     } catch {
       try await passOver(saved, size: size, modified: modified)
+      if failing { throw error }
       return true
     }
   }
@@ -858,36 +870,67 @@ actor UsageScanner {
     kind == .bots ? botsStoreSource : source(kind.runtime.rawValue, url.path)
   }
 
-  /// Reads the stores of `kind` to their end at once, outside the passes:
-  /// the bots' before a bot is purged or the bots move.
-  func readStores(_ kind: PiStoreKind) async {
+  /// Reads the stores of `kind` to their end at once, outside the passes,
+  /// by `deadline` when one is given: the bots' before a bot is purged or
+  /// the bots move. Returns whether each was read without failing.
+  @discardableResult
+  func readStores(_ kind: PiStoreKind, deadline: Duration? = nil) async -> Bool {
     var pass = Pass()
-    let sources = (try? await library.usageSources()) ?? [:]
+    var succeeded = true
     for store in stores where store.kind == kind {
       let path = store.url.path
       guard FileManager.default.fileExists(atPath: path) else { continue }
-      var size: Int64 = 0, modified: Int64 = 0
-      for file in [path, path + "-wal"] {
-        guard let attributes = try? FileManager.default.attributesOfItem(atPath: file) else { continue }
-        let (fileSize, fileModified) = Self.stat(attributes)
-        size += fileSize
-        modified = max(modified, fileModified)
-      }
+      let (size, modified) = Self.storeStat(path)
       let source = Self.storeSource(kind, store.url)
-      _ = try? await readStore(path, source: source, kind: kind, size: size, modified: modified, known: sources[source], into: &pass)
+      do {
+        _ = try await readStore(path, source: source, kind: kind, size: size, modified: modified,
+                                known: try await library.usageSources()[source], deadline: deadline, failing: true, into: &pass)
+      } catch {
+        succeeded = false
+      }
     }
+    return succeeded
   }
 
-  /// Where the bots' store has been read to, to hand over with the bots.
-  func botsPlace() async -> String? {
+  private static func storeStat(_ path: String) -> (Int64, Int64) {
+    var size: Int64 = 0, modified: Int64 = 0
+    for file in [path, path + "-wal"] {
+      guard let attributes = try? FileManager.default.attributesOfItem(atPath: file) else { continue }
+      let (fileSize, fileModified) = Self.stat(attributes)
+      size += fileSize
+      modified = max(modified, fileModified)
+    }
+    return (size, modified)
+  }
+
+  /// The bots' store is not read while they move: not on the old host once
+  /// its place is taken, nor on the new one until the move is done.
+  private var botsHeld = false
+  /// The reads of the bots' store under way.
+  private var readingBots = 0
+
+  /// Stops reading the bots' store, reads it to its end once more within
+  /// `limit` when it can, and returns where it has been read to, to hand
+  /// over with the bots.
+  func holdBots(limit: Duration) async -> String? {
+    botsHeld = true
+    while readingBots > 0 { try? await Task.sleep(for: .milliseconds(20)) }
+    _ = await readStores(.bots, deadline: clock() + limit)
     guard let known = try? await library.usageSources()[Self.botsStoreSource], known.boundary == Self.start else { return nil }
     return known.state
   }
 
+  /// Reads the bots' store again, after a move ended either way.
+  func releaseBots() {
+    botsHeld = false
+  }
+
   /// Takes over where the host the bots came from had read their store to,
-  /// before the bots start or the store is read here; with none, the store
-  /// is read from its start.
+  /// before the store is here; with none, the store is read from its start.
+  /// It is not read until the move is done.
   func installBotsPlace(_ place: String?) async throws {
+    botsHeld = true
+    while readingBots > 0 { try? await Task.sleep(for: .milliseconds(20)) }
     try await library.saveUsage([], source: UsageSource(id: Self.botsStoreSource, boundary: place == nil ? "" : Self.start,
                                                         state: place ?? ""))
   }
