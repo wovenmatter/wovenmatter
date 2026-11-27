@@ -1038,7 +1038,8 @@ struct MessageRow: View {
                     // the page's readable text, from the same action row.
                     ConversationVisualReplyCopyButton(keys: visualKeys)
                         .frame(minHeight: ConversationMetrics.actionRowHeight)
-                        .padding(.top, ConversationMetrics.rowGap)
+                        // Its hover box reaches past the row; the gap keeps it clear of the page.
+                        .padding(.top, ConversationMetrics.entryGap)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)

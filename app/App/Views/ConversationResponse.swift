@@ -114,7 +114,11 @@ struct ConversationResponse: View {
                 // One height in every state: the dots, Copy alone, and Copy with
                 // the files' first line (the chips are as tall as the row).
                 .frame(minHeight: ConversationMetrics.actionRowHeight)
-                .padding(.top, files.isEmpty ? ConversationMetrics.tight : ConversationMetrics.entryGap)
+                // Copy's hover box reaches past the row; it stays a label gap
+                // clear of the text (more with files).
+                .padding(.top, files.isEmpty
+                    ? ConversationMetrics.labelGap + (PanelControlButton.size - ConversationMetrics.actionRowHeight) / 2
+                    : ConversationMetrics.entryGap)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)

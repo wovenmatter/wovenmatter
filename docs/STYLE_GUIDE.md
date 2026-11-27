@@ -519,8 +519,9 @@ when an intentional design change is accepted.
   it, one line cut at its end. Its controls float in its top corner and show
   on hover, while zoomed, or with focus. Copy takes the whole answer: the
   visual reply's text, then the reply's. Under the reply, Copy and the files it
-  refers to share one wrapping row, as tall as a file chip in every state and
-  an entry gap below the text when it holds files; a link in the text to one
+  refers to share one wrapping row, as tall as a file chip in every state;
+  Copy's hover box is the size of the panel buttons' and starts a label gap
+  below the text (the row an entry gap below it when it holds files); a link in the text to one
   of those files opens it as its chip does, and one to a file without a chip
   stays plain text. In reply text,
   lists sit tighter than paragraphs but clearly looser than a line: 8 under a
