@@ -72,6 +72,59 @@ enum AgentDisclosureStore {
     }
 }
 
+/// The sidebar's own names and order for remote workspaces. Presentation only:
+/// the machine keeps its name everywhere else.
+enum RemoteWorkspaceSidebarStore {
+    static let namesKey = "wovenmatter.sidebar.remote-workspace-names"
+    static let orderKey = "wovenmatter.sidebar.remote-workspace-order"
+
+    static func names(_ raw: String) -> [String: String] {
+        guard let data = raw.data(using: .utf8),
+              let names = try? JSONDecoder().decode([String: String].self, from: data) else { return [:] }
+        return names
+    }
+
+    static func order(_ raw: String) -> [String] {
+        guard let data = raw.data(using: .utf8),
+              let order = try? JSONDecoder().decode([String].self, from: data) else { return [] }
+        return order
+    }
+
+    static func name(of machine: Machine, in raw: String) -> String {
+        names(raw)[machine.id] ?? machine.name
+    }
+
+    /// Machines the person moved keep their place; the rest follow in the order given.
+    static func ordered(_ machines: [Machine], in raw: String) -> [Machine] {
+        let rank = Dictionary(order(raw).enumerated().map { ($1, $0) }, uniquingKeysWith: { first, _ in first })
+        return machines.enumerated().sorted { lhs, rhs in
+            (rank[lhs.element.id] ?? Int.max, lhs.offset) < (rank[rhs.element.id] ?? Int.max, rhs.offset)
+        }.map(\.element)
+    }
+
+    /// An empty name, or the machine's own, removes the sidebar name.
+    static func rename(_ machine: Machine, to name: String, in raw: inout String) {
+        var names = names(raw)
+        let name = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        names[machine.id] = name.isEmpty || name == machine.name ? nil : name
+        raw = encode(names)
+    }
+
+    static func move(_ machineID: String, by offset: Int, among ordered: [Machine], in raw: inout String) {
+        var ids = ordered.map(\.id)
+        guard let index = ids.firstIndex(of: machineID), ids.indices.contains(index + offset) else { return }
+        ids.swapAt(index, index + offset)
+        raw = encode(ids)
+    }
+
+    private static func encode<Value: Encodable>(_ value: Value) -> String {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = .sortedKeys
+        guard let data = try? encoder.encode(value), let raw = String(data: data, encoding: .utf8) else { return "" }
+        return raw
+    }
+}
+
 struct AgentPresentation: Equatable {
     let displayName: String
     let iconKey: String

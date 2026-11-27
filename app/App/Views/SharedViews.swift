@@ -173,6 +173,7 @@ extension View {
 
 struct FolderNamePopover: View {
     let title: String
+    var placeholder = "Folder name"
     let actionTitle: String
     @Binding var name: String
     let onCancel: () -> Void
@@ -187,7 +188,7 @@ struct FolderNamePopover: View {
         VStack(alignment: .leading, spacing: 12) {
             Text(title)
                 .font(.system(size: 14, weight: .semibold))
-            TextField("Folder name", text: $name)
+            TextField(placeholder, text: $name)
                 .focused($nameFocused)
                 .quietTextInput()
                 .onSubmit {
