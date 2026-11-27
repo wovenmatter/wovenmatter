@@ -410,7 +410,7 @@ private let visualReplyTools: [WovenTool] = [
       }
       let tools = call.tools
       let data = Data(prepared.html.utf8)
-      let published = VisualReply(title: title, height: height, width: width, digest: try await tools.library.storeContent(data),
+      var published = VisualReply(title: title, height: height, width: width, digest: try await tools.library.storeContent(data),
                                size: Int64(data.count))
       // A bot's chat and Forum seat are its runtime's own; the visual reply reaches it with the
       // call's result, and from a seat the runtime posts it to the Forum.
@@ -422,6 +422,8 @@ private let visualReplyTools: [WovenTool] = [
             + "written and will not show. Put images in the HTML as data URIs."),
         ], meta: .object(["wovenVisualReply": try JSONValue(encoding: published)]))
       }
+      // How the page starts, so a chat can place its caption before the page has loaded.
+      published.opensWithTitle = VisualReply.lead(VisualReply.sourceLead(html: html), isTitle: title)
       try await tools.sessions.host(for: sessionID).publish(published)
       return shownShape.result(["shownIn": .string("chat"), "title": .text(title)])
     }),

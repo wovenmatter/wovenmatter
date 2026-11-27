@@ -64,6 +64,21 @@ func aVisualReplyCanComeFromAFileOnThisMachine() throws {
 }
 
 @Test
+func aVisualReplysLeadIsItsFirstTextWhenThatIsAHeadingOrCaption() {
+  let cases: [(String, String)] = [
+    ("<title>T</title><style>h2{}</style><body>\n<h2 class=\"t\">Monthly &amp; values</h2><p>x</p>", "Monthly & values"),
+    ("<!-- <h1>no</h1> --><table><caption>Sales <b>by</b>\n quarter</caption><tr><td>1</td></tr></table>", "Sales by quarter"),
+    ("<table><tr><th>Month</th></tr></table><h2>Later</h2>", ""),
+    ("<script>document.write('<h2>x</h2>')</script><canvas></canvas>", ""),
+    // A chart its script draws comes before a caption kept for screen readers.
+    ("<svg id=\"c\" viewBox=\"0 0 1 1\"></svg><table class=\"sr\"><caption>Monthly values</caption></table>", ""),
+  ]
+  for (html, lead) in cases { #expect(VisualReply.sourceLead(html: html) == lead, "\(html)") }
+  #expect(VisualReply.lead(" monthly VALUES ", isTitle: "Monthly values"))
+  #expect(!VisualReply.lead("", isTitle: "Monthly values") && !VisualReply.lead("", isTitle: ""))
+}
+
+@Test
 func everyRuntimesReportOfTheCallIsKeptWithoutTheVisualReply() {
   let input = #"{"html":"<h1>Sales</h1>","title":"Sales"}"#
   let forms: [(name: String, title: String?)] = [
@@ -153,7 +168,7 @@ func aPublishedVisualReplyIsSavedOnceShownLiveAndFetchedOnAnotherMachine() async
 
   // The stand-in calls the tool over its tool socket and then reports the call, as a runtime does.
   // Only the visual reply: its title is its own <title>, it starts at the default height, and it
-  // keeps the width it asked for.
+  // keeps the width it asked for; its heading is not its title.
   let html = "<title>Sales by quarter</title><h1>Quarterly sales</h1>" + String(repeating: "<i>bar</i>", count: 5000)
   let arguments = String(decoding: try Wire.encoder.encode(JSONValue.object(["html": .string(html), "width": .integer(360)])),
                          as: UTF8.self)
@@ -173,7 +188,7 @@ func aPublishedVisualReplyIsSavedOnceShownLiveAndFetchedOnAnotherMachine() async
     return
   }
   #expect(reply == VisualReply(title: "Sales by quarter", height: 320, width: 360, digest: Library.digest(of: Data(html.utf8)),
-                           size: Int64(html.utf8.count)))
+                           size: Int64(html.utf8.count), opensWithTitle: false))
   #expect(!call.failed && call.kind == .visualReply)
   #expect(!call.input.contains("Quarterly sales") && call.input.contains("characters, shown in the chat"))
   #expect(try await a.server.library.content(reply.digest)?.data == Data(html.utf8))

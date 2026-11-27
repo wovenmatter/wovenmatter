@@ -27,8 +27,10 @@ struct ConversationHTMLRenderView: View {
     /// The page has reported its first measured height: until then the frame
     /// shows the loading label at the reserved height, never a blank page.
     @State private var measured = false
-    /// The caption above the frame, decided once, when the page is first
-    /// revealed, and kept through a failure and its retry.
+    /// The caption above the frame: decided from how the page's source
+    /// starts, from the first frame on, when that was read; else, and when
+    /// the page shown starts otherwise, when the page is first revealed.
+    /// Kept through a failure and its retry.
     @State private var caption: String?
     @State private var captionDecided = false
     @FocusState private var focusedControl: Control?
@@ -38,25 +40,32 @@ struct ConversationHTMLRenderView: View {
     private var title: String { reference.title.isEmpty ? "Visual reply" : reference.title }
 
     /// The reply's title as a caption above the frame, unless the page starts
-    /// with it itself, or there is none: decided from what the inline page had
-    /// reported when it was revealed, and never changed afterwards.
-    private func decideCaption() -> String? {
-        let own = reference.title.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !own.isEmpty else { return nil }
-        return pageLead.trimmingCharacters(in: .whitespacesAndNewlines).caseInsensitiveCompare(own) == .orderedSame ? nil : own
+    /// with it itself, or there is none.
+    private static func caption(title: String, opensWithTitle: Bool) -> String? {
+        let own = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        return own.isEmpty || opensWithTitle ? nil : own
     }
 
     /// Shows the page: at the height it reported, or the reserved one when it
-    /// never reports; the caption is settled in the same update.
-    private func reveal() {
+    /// never reports. What the shown page reported settles the caption in the
+    /// same update; it changes one read from the source only where they
+    /// differ (a heading a script writes, or first text a style hides). A
+    /// page that never reported keeps the source's answer.
+    private func reveal(reported: Bool) {
         guard !measured else { return }
-        if !captionDecided { caption = decideCaption(); captionDecided = true }
+        let shown = Self.caption(title: reference.title, opensWithTitle: VisualReply.lead(pageLead, isTitle: reference.title))
+        if !captionDecided || (reported && shown != caption) { caption = shown; captionDecided = true }
         measured = true
     }
 
     init(reference: ConversationHTMLRenderReference) {
         self.reference = reference
         _height = State(initialValue: CGFloat(min(2000, max(80, reference.height))))
+        // How the source starts places the caption from the first frame on.
+        if let opensWithTitle = reference.opensWithTitle {
+            _caption = State(initialValue: Self.caption(title: reference.title, opensWithTitle: opensWithTitle))
+            _captionDecided = State(initialValue: true)
+        }
     }
 
     var body: some View {
@@ -229,7 +238,7 @@ struct ConversationHTMLRenderView: View {
             onHeight: { value in
                 guard fitsHeight, value.isFinite else { return }
                 height = min(20_000, max(80, ceil(value)))
-                reveal()
+                reveal(reported: true)
             }, onLead: { lead in
                 if fitsHeight { pageLead = lead }
             }, onLoaded: {
@@ -239,7 +248,7 @@ struct ConversationHTMLRenderView: View {
                 revealTimer?.cancel()
                 revealTimer = Task { @MainActor in
                     try? await Task.sleep(for: .seconds(1))
-                    if !Task.isCancelled, self.reply != nil { reveal() }
+                    if !Task.isCancelled, self.reply != nil { reveal(reported: false) }
                 }
             }, onLink: { pendingLink = $0 }, onFailure: { error in
                 if fitsHeight { revealTimer?.cancel() }

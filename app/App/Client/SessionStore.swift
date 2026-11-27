@@ -755,7 +755,7 @@ final class SessionStore {
                     activity: AgentRunActivity(
                         id: entry.id, kind: .activity, title: reply.title, status: "completed", position: position,
                         htmlRender: ConversationHTMLRenderReference(id: entry.id, title: reply.title, height: reply.height, width: reply.width,
-                                                                    digest: reply.digest)),
+                                                                    digest: reply.digest, opensWithTitle: reply.opensWithTitle)),
                     createdAt: Self.timestamps.string(from: entry.date), sequence: Int64(position)))
             case .notice(let notice):
                 if notice.kind == .nativeSessionGone { goneNotice = entry.id }

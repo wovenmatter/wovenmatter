@@ -9,8 +9,12 @@ public struct ConversationHTMLRenderReference: Codable, Equatable, Sendable {
   public let height: Int
   public let width: Int?
   public let digest: String
-  public init(id: String, title: String, height: Int, width: Int? = nil, digest: String) {
+  /// Whether the page starts with its own title, read from its source when
+  /// it was published (see `VisualReply.opensWithTitle`); nil when not read.
+  public let opensWithTitle: Bool?
+  public init(id: String, title: String, height: Int, width: Int? = nil, digest: String, opensWithTitle: Bool? = nil) {
     self.id = id; self.title = title; self.height = height; self.width = width; self.digest = digest
+    self.opensWithTitle = opensWithTitle
   }
 }
 

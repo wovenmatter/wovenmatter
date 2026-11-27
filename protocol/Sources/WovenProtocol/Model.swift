@@ -395,13 +395,115 @@ public struct VisualReply: Codable, Sendable, Hashable {
   public var width: Int?
   public var digest: String
   public var size: Int64
+  /// Whether the page starts with its own title (its first text a heading
+  /// or a table's caption that reads as the title), read from its source
+  /// when it was published. None when it was not read (a bot's visual reply).
+  public var opensWithTitle: Bool?
 
-  public init(title: String, height: Int, width: Int? = nil, digest: String, size: Int64) {
+  public init(title: String, height: Int, width: Int? = nil, digest: String, size: Int64, opensWithTitle: Bool? = nil) {
     self.title = title
     self.height = height
     self.width = width
     self.digest = digest
     self.size = size
+    self.opensWithTitle = opensWithTitle
+  }
+
+  /// Whether `lead` (a page's first heading or caption) reads as `title`.
+  public static func lead(_ lead: String, isTitle title: String) -> Bool {
+    let own = title.trimmingCharacters(in: .whitespacesAndNewlines)
+    return !own.isEmpty && lead.trimmingCharacters(in: .whitespacesAndNewlines).caseInsensitiveCompare(own) == .orderedSame
+  }
+
+  /// The page's first text in its source, when it is inside a heading or a
+  /// table's caption: that element's text, whitespace collapsed; empty when
+  /// the first text is anything else or there is none. It reads as the
+  /// page's own report reads the page once shown, except that it cannot see
+  /// styles or scripts: text a style hides, or a heading a script writes,
+  /// can make the two differ. An empty `<svg>` before any text counts as a
+  /// drawing its script fills with text of its own.
+  public static func sourceLead(html: String) -> String {
+    let s = Array(html.unicodeScalars)
+    var i = 0
+    var headings: [String] = []
+    var collecting: String?
+    var text = ""
+    func lower(_ range: Range<Int>) -> String { String(String.UnicodeScalarView(s[range])).lowercased() }
+    // Whether `needle` (lowercase) starts at `j`, ignoring case.
+    func at(_ j: Int, _ needle: String) -> Bool {
+      let n = needle.unicodeScalars.count
+      return j + n <= s.count && lower(j..<(j + n)) == needle
+    }
+    func find(_ needle: String, from start: Int, within limit: Int = .max) -> Int? {
+      guard let first = needle.unicodeScalars.first else { return nil }
+      var j = start
+      while j < s.count, j - start <= limit {
+        if (s[j] == first || String(s[j]).lowercased() == String(first)), at(j, needle) { return j }
+        j += 1
+      }
+      return nil
+    }
+    func finish() -> String {
+      // A line break the page draws (`<br>`) stays one; the source's own do not.
+      text.split(separator: "\u{2028}", omittingEmptySubsequences: false)
+        .map { $0.split(whereSeparator: \.isWhitespace).joined(separator: " ") }
+        .joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+    while i < s.count {
+      if s[i] == "<" {
+        if at(i, "<!--") { i = (find("-->", from: i + 4) ?? s.count - 3) + 3; continue }
+        var j = i + 1
+        let closing = j < s.count && s[j] == "/"
+        if closing { j += 1 }
+        let nameStart = j
+        while j < s.count, s[j].properties.isAlphabetic || ("0"..."9").contains(s[j]) { j += 1 }
+        let name = lower(nameStart..<j)
+        // The rest of the tag, past any quoted attribute.
+        var quote: Unicode.Scalar?
+        while j < s.count, quote != nil || s[j] != ">" {
+          if let q = quote { if s[j] == q { quote = nil } } else if s[j] == "\"" || s[j] == "'" { quote = s[j] }
+          j += 1
+        }
+        i = j + 1
+        if name.isEmpty { continue }
+        if !closing, ["script", "style", "template", "noscript", "title"].contains(name) {
+          i = find("</" + name, from: i).map { k in (find(">", from: k) ?? s.count - 1) + 1 } ?? s.count
+          continue
+        }
+        // An empty drawing before any text is one its script fills, and the
+        // text it draws (a chart's labels) comes first once shown.
+        if !closing, collecting == nil, name == "svg" {
+          var k = i
+          while k < s.count, s[k].properties.isWhitespace { k += 1 }
+          if s[j - 1] == "/" || at(k, "</svg") { return "" }
+        }
+        let heading = ["h1", "h2", "h3", "h4", "h5", "h6", "caption"].contains(name)
+        if let open = collecting {
+          if closing, name == open { return finish() }
+          if name == "br" { text += "\u{2028}" }
+          continue
+        }
+        if heading { if closing { headings.removeAll { $0 == name } } else { headings.append(name) } }
+        continue
+      }
+      // A character, or an entity standing for one.
+      var scalar = s[i]
+      var next = i + 1
+      if scalar == "&", let end = find(";", from: i, within: 10) {
+        let entity = lower((i + 1)..<end)
+        let named: [String: Unicode.Scalar] = ["amp": "&", "lt": "<", "gt": ">", "quot": "\"", "apos": "'", "nbsp": "\u{A0}"]
+        let number = entity.hasPrefix("#x") ? UInt32(entity.dropFirst(2), radix: 16)
+          : entity.hasPrefix("#") ? UInt32(entity.dropFirst()) : nil
+        if let found = named[entity] ?? number.flatMap(Unicode.Scalar.init) { scalar = found; next = end + 1 }
+      }
+      i = next
+      if collecting != nil { text.unicodeScalars.append(scalar == "\u{2028}" ? " " : scalar); continue }
+      if scalar.properties.isWhitespace { continue }
+      guard let open = headings.last else { return "" }
+      collecting = open
+      text.unicodeScalars.append(scalar)
+    }
+    return collecting == nil ? "" : finish()
   }
 }
 

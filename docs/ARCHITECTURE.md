@@ -239,7 +239,9 @@ behind one adapter interface in the server and are treated alike:
   25 MiB) on that machine. A visual reply is not a Page: it belongs to its chat only, is not in
   the Library and is never edited. Its HTML is stored once, in the content
   store; the session gets one small item, `visualReply` (title, starting
-  height, the width it asked for if any, digest), saved when the tool is called, after the text so far. The
+  height, the width it asked for if any, digest, and whether the page starts
+  with its own title, read from the source so the chat can place a caption
+  before the page loads), saved when the tool is called, after the text so far. The
   runtime's own report of the call keeps only the HTML's length, and the chat
   shows the visual reply in its place. The chat shows it above the agent's text
   in an opaque sandboxed frame, with no access to the app, its tools or the
