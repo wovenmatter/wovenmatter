@@ -527,7 +527,7 @@ final class OpenCodeSession: RuntimeSession {
           // an interrupt) is dropped by the projection, before it changes
           // anything; any other output starts a turn, even when the stream
           // missed the execution's start.
-          var events = state.projection.receive(event)
+          var events = state.projection.receive(event, running: state.running)
           if event["type"]?.string == "session.execution.started" || !events.isEmpty { state.running = true }
           if let end = events.firstIndex(where: { if case .turnFinished = $0 { true } else { false } }) {
             // Whatever the turn still asked is withdrawn with it.

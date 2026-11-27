@@ -287,6 +287,12 @@ private func scriptCalls(_ events: [RuntimeEvent]) -> (open: [ToolCall], finishe
   #expect(events.compactMap { if case .tool(let id, _, true) = $0 { id } else { nil } } == ["c1"])
   #expect(events.compactMap { if case .turnFinished(let failure, _) = $0 { failure ?? "ok" } else { nil } } == ["ok", "ok"])
   #expect(events.contains { if case .text(let text) = $0 { text == "Done." } else { false } })
+
+  // In a turn the session sent and knows is running, such a result is kept.
+  var projection = OpenCodeProjection()
+  let kept = projection.receive(try! OpenCodeSSEParser.decode(Data(
+    #"{"type":"session.tool.success","data":{"sessionID":"s","assistantMessageID":"m3","id":"c3","content":[]}}"#.utf8)), running: true)
+  #expect(kept.contains { if case .tool(let id, _, true) = $0 { id == "c3" } else { false } })
 }
 
 @Test func openCodeToolProgressStreamsWhatIsNew() {

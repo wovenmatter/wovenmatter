@@ -1128,7 +1128,7 @@ extension String {
   private static let workTimelineCredentialPatterns: [(NSRegularExpression, String)] = [
     (#"(?i)\b(authorization|proxy-authorization|x-api-key|api-key|cookie)(\s*:\s*)(?:"(?:[^"\\]|\\.)*(?:"|\\?$)|'[^']*'?|[^'"“”\n]+)"#,
      "$1$2…"),
-    (#"(?<!\S)(-u|--user)(\s+|=)(?:'[^':]*:[^']*'?|"(?:[^"\\:]|\\.)*:(?:[^"\\]|\\.)*(?:"|\\?$)|[^\s'"]+:[^\s'"]+)"#, "$1$2…"),
+    (#"(?<!\S)(-u|--user)(\s+|=)(?:'[^':]*:[^']*'?|"(?:[^"\\:]|\\[^:])*\\?:(?:[^"\\]|\\.)*(?:"|\\?$)|[^\s'"]+:[^\s'"]+)"#, "$1$2…"),
     (#"(?i)(?<!\S)(--?(?:[a-z0-9]+-)*"# + workTimelineCredentialName + #")(\s+)(?!-)"# + workTimelineCredentialValue, "$1$2…"),
     (#"(?i)(?<![A-Za-z0-9_.-])((?:[A-Za-z0-9_.-]*[_.-])?"# + workTimelineCredentialName + ")=" + workTimelineCredentialValue, "$1=…"),
     (#"(?i)\b([a-z][a-z0-9+.-]*://)[^/\s@?#]+@"#, "$1…@"),

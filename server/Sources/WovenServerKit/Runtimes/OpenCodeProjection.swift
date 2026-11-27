@@ -52,18 +52,21 @@ struct OpenCodeProjection: Sendable {
 
     func contains(_ id: String) -> Bool { ids.contains(id) }
 
+    /// The execution just ended keeps all its ids: only older ones go.
     mutating func insert(contentsOf new: Set<String>) {
       for id in new where ids.insert(id).inserted { order.append(id) }
-      if order.count > Self.limit {
-        let gone = order.prefix(order.count - Self.limit)
+      let keep = max(Self.limit, new.count)
+      if order.count > keep {
+        let gone = order.prefix(order.count - keep)
         ids.subtract(gone)
         order.removeFirst(gone.count)
       }
     }
   }
 
-  /// The events `event` makes. It is one of this session's own.
-  mutating func receive(_ event: JSONValue) -> [RuntimeEvent] {
+  /// The events `event` makes. It is one of this session's own. `running`
+  /// is whether the session knows of a turn running, one it sent.
+  mutating func receive(_ event: JSONValue, running: Bool = false) -> [RuntimeEvent] {
     let type = event["type"]?.string ?? ""
     // An event of an execution that ended (a tool closing after an
     // interrupt) is left out before it changes anything here.
@@ -76,7 +79,7 @@ struct OpenCodeProjection: Sendable {
     // it starts no turn. Text, reasoning and a call's own start do.
     if type == "session.execution.started" { executing = true }
     let result = ["session.tool.success", "session.tool.failed", "session.tool.progress"].contains(type)
-    if result, calls[call] == nil, !executing, turnMessages.isEmpty { return [] }
+    if result, calls[call] == nil, !executing, !running, turnMessages.isEmpty { return [] }
     if !message.isEmpty { turnMessages.insert(message) }
     if !call.isEmpty { turnCalls.insert(call) }
     // What starts the step's text or a tool call. A tool's later events are
