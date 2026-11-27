@@ -9,13 +9,14 @@ import { AgentDoc, AssistantEntry, ConversationIdle, Harness, UsageDoc, createRe
 import { NodeExecutionEnv } from '@earendil-works/pi-durable/env/node';
 import { CODEMODE_TOOL_NAME, createCodemodeExtension } from '@earendil-works/pi-durable/codemode';
 import { createNodePhotonImages } from '@earendil-works/pi-durable/images/node';
-import { openNodeSqliteStorage } from '@earendil-works/pi-durable/storage/sqlite/node';
+import { SqliteStorage } from '@earendil-works/pi-durable/storage/sqlite';
+import { openNodeSqliteDatabase } from '@earendil-works/pi-durable/storage/sqlite/node';
 import { createCodingTools } from '@earendil-works/pi-durable/tools';
 import { AgentError, humanMessage } from './rpc.mjs';
 import { availableModels, modelReference, offeredModels, refreshCatalogs, thinkingLevels } from './models.mjs';
 import { Projection } from './projection.mjs';
 import { Subagents, Workflow, connectMcp, createSearch } from './tools.mjs';
-import { countingSummaries, saveSummaryUsage } from './usage.mjs';
+import { countingSummaries, createUsageTable, saveSummaryUsage } from './usage.mjs';
 
 const context = BACKGROUND_CONTEXT;
 export const SESSION_NOT_FOUND = -32002;
@@ -138,10 +139,12 @@ export class Session {
       section('woven-codemode', input => codemodeGuide(input, this.codemode, this.mcp), { tag: false }),
       section('project', () => instructions || undefined, { tag: false }),
     ] }));
-    this.storage = await openNodeSqliteStorage(path, { prefix: tablePrefix(this.sessionId) });
+    const database = await openNodeSqliteDatabase(path);
+    this.storage = await SqliteStorage.open(database, { prefix: tablePrefix(this.sessionId) });
+    await createUsageTable(database);
     this.harness = await Harness.open(this.storage, {
-      // Each compaction summary's usage is saved with its time as it returns.
-      models: countingSummaries(this.models.runtime, reply => saveSummaryUsage(path, this.sessionId, reply)), registry,
+      // Each compaction summary's usage is saved with its time once it returns.
+      models: countingSummaries(this.models.runtime, reply => saveSummaryUsage(database, this.sessionId, reply)), registry,
       env: target => new NodeExecutionEnv({ cwd: target.cwd ?? this.cwd }),
       settings: { toolExecution: 'parallel', compaction: { enabled: true } },
     }, context);
