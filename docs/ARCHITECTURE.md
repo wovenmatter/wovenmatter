@@ -167,7 +167,7 @@ fetched by digest when needed.
 
 ### What syncs how
 
-- **Append-only**: session items, usage records, dictation history. Written
+- **Append-only**: session items, dictation history. Written
   once by the owning machine, never edited.
 - **Newest write wins**: machines, sessions (title, folder, archived), folders,
   settings, schedules, sealed secrets, database descriptions, usage hours.
@@ -274,10 +274,10 @@ next message resumes it.
 
 ## Usage
 
-Each server counts the usage of every harness on its own machine, whether the
-work was done in Woven Matter or not, and writes it to the library, where it
-syncs like any other rows. The Usage page on any machine reads its own
-library and so shows every machine.
+Each server counts the usage of every runtime on its own machine, whether the
+work was done in Woven Matter or not, from the runtime's own record there,
+and writes it to the library, where it syncs like any other rows. The Usage
+page on any machine reads its own library and so shows every machine.
 
 - **Codex, Claude Code, Grok Build, OpenCode and the Pi CLI** are counted only
   from their own history, wherever they ran (in Woven Matter, a desktop app,
@@ -293,9 +293,18 @@ library and so shows every machine.
   in that history and is counted from there, once. Woven Matter's own record
   of which native session each of its sessions is (`native_sessions`) names
   the session and marks it as made in Woven Matter.
-- **Pi Durable** writes one usage record per turn, and **bots** one per model
-  turn, in their chats and in the Forum alike, from what the runtime reports.
-  Nothing else counts them.
+- **Pi Durable** and the **bots** are counted from their own stores, which
+  keep every conversation for good: Pi Durable's `pi-durable/pi-durable.sqlite`
+  and, on the bots' host, `bots/bots.sqlite`, both in the server's data
+  folder. Every assistant response in them counts, a sub-agent's under the
+  conversation that ran it, with what a conversation's own usage sums hold
+  beyond its responses (Pi Durable's compaction summaries) as one more. The
+  bots keep the calls they make outside a conversation (thread titles, memory
+  extraction, compaction) in their store too. A bot's chat is filed under its
+  chat, a seat's work under its Forum room, and the Forum's own titles under
+  the room. Bots that move to another machine take their store with them: the
+  old host reads it once more as they stop, and the new one counts what they
+  do from when it became their host. A turn writes no usage of its own.
 - Only counts leave a history: the harness, model, time, tokens by kind, the
   model calls, the cost when the harness records one, and the harness's own
   session identifier. No text, path or credential is read into the library.
@@ -469,12 +478,12 @@ transfer.
 - A bot's items are a session's kinds, saved through the same writer: messages
   (one from another session under its name), the model's thinking, tool calls
   with their input and output under the same cap, visual replies, failures and
-  stops as notices, and one usage record per model turn.
+  stops as notices. Their usage is read from the bots' store.
 - A bot hears the Forum and each thread it is in through a seat: a
   conversation of its own. Its posts, and its tool calls and thinking there,
   are saved in the room under its name, in time order; what it says in its
-  seat without posting stays private. Each of a seat's model turns is recorded
-  as usage under the room, also after the seat is gone (its thread deleted,
+  seat without posting stays private. Each of a seat's model turns counts as
+  usage under the room, also after the seat is gone (its thread deleted,
   the bot switched out). A Forum post carries the person's open notes to the
   bots as a chat message does, and Stop in a room stops the bots working there
   only; Pause stops every room.

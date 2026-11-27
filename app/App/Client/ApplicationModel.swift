@@ -134,7 +134,7 @@ final class ApplicationModel {
         if any("settings", "sealed_secrets") { await settings.reload() }
         if any("schedules", "sessions") { await calendar.reload() }
         if any("schedules", "sessions", "settings") { await agentTools.reload() }
-        if any("usage_hours", "usage_records") { usage.usageChanged() }
+        if any("usage_hours") { usage.usageChanged() }
     }
 
     /// A server left running by another release of the app is restarted once,
