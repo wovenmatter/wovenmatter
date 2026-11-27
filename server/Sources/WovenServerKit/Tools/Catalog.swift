@@ -375,8 +375,8 @@ private let visualReplyTools: [WovenTool] = [
       width unless you pass `width`, so pass `width` for anything narrower than the chat, such as a small table \
       (about 320). Its height fits its content; `height` is only where it starts, and `title` defaults to the \
       document's own <title>. The chat shows `title` \
-      above it, so do not repeat it inside the document. The chat draws a frame around it and gives the body a little \
-      padding, so draw no outer card or border of your own. Absolute paths to local \
+      above it, so do not repeat it inside the document. The chat gives the body a little padding; draw no outer \
+      card or border of your own. Absolute paths to local \
       images in it are embedded; every one must be there. Heights in vh, vmin or vmax are refused, since the frame \
       fits its content. It runs sandboxed, with no access to Woven Matter, your tools or this chat. For something \
       the person wants to keep and change, make an app with `create_artifact` instead.

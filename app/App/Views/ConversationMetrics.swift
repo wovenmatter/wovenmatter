@@ -166,17 +166,10 @@ extension View {
     }
 
     /// Debug builds: records where a glass surface over a transcript is (the
-    /// composer, the floating header buttons) and its corner radius, so a
+    /// composer) and its corner radius, so a
     /// debug still draws it as glass: window captures draw the material clear.
     func conversationGlassSnapshot(radius: CGFloat) -> some View {
         modifier(CoverSnapshotRecorder(glassRadius: radius))
-    }
-
-    /// A floating button over a transcript: a round glass backing of its own
-    /// size, the composer's glass, so its glyph reads over the text passing
-    /// under it. Under Reduce Transparency the panel's colour instead.
-    func conversationFloatingGlass(_ enabled: Bool = true) -> some View {
-        modifier(ConversationFloatingGlass(enabled: enabled))
     }
 }
 
@@ -277,37 +270,6 @@ struct ConversationGlassSurface {
     let radius: CGFloat
 }
 #endif
-
-private struct ConversationFloatingGlass: ViewModifier {
-    let enabled: Bool
-    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
-    @Environment(\.wovenTheme) private var theme
-
-    func body(content: Content) -> some View {
-        if enabled {
-            content
-                // A step above the muted ink, so the glyph reads over what the glass blurs.
-                .environment(\.sidebarForeground, WovenPalette.foreground.opacity(0.8))
-                .background {
-                    if reduceTransparency {
-                        Circle().fill(theme.palette.workspace)
-                    } else {
-                        Color.clear.glassEffect(.regular.interactive(), in: Circle())
-                    }
-                }
-                .background {
-                    // Solid under Reduce Transparency: a debug still covers it rather than glazing it.
-                    if reduceTransparency {
-                        Color.clear.conversationCoverSnapshot(radius: .greatestFiniteMagnitude)
-                    } else {
-                        Color.clear.conversationGlassSnapshot(radius: .greatestFiniteMagnitude)
-                    }
-                }
-        } else {
-            content
-        }
-    }
-}
 
 private struct ConversationEdges: ViewModifier {
     static let jumpSize: CGFloat = 30

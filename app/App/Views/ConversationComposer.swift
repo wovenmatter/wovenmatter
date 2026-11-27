@@ -16,8 +16,6 @@ struct PanelControlButton: View {
                 .contentShape(Rectangle())
         }
         .buttonStyle(WovenIconButtonStyle())
-        // It floats beside the composer, over the transcript.
-        .conversationFloatingGlass()
         .accessibilityLabel(accessibilityLabel)
         .help(help)
     }

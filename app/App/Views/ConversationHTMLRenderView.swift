@@ -156,11 +156,6 @@ struct ConversationHTMLRenderView: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .clipShape(RoundedRectangle(cornerRadius: ConversationMetrics.blockRadius, style: .continuous))
-        .overlay {
-            // A step stronger in Dark, where the hairline otherwise all but vanishes.
-            RoundedRectangle(cornerRadius: ConversationMetrics.blockRadius, style: .continuous)
-                .strokeBorder(WovenPalette.foreground.opacity(theme == .dark ? 0.14 : 0.09), lineWidth: 1)
-        }
         // Zoom and expand float in the frame's top corner, over the page.
         .overlay(alignment: .topTrailing) {
             frameControls.padding(ConversationMetrics.rowGap)

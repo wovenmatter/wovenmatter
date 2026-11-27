@@ -431,14 +431,6 @@ struct CloudConversation: View {
                 help: "Remove panel",
                 action: onClosePanel
             )
-        } else if let conversation, !conversation.isArchived, conversation.runtimeKind == .defaultAgent {
-            PanelControlButton(
-                glyph: .settings,
-                accessibilityLabel: "Pi Durable settings",
-                help: "Pi Durable settings"
-            ) {
-                model.navigation.pendingDefaultAgentSettingsScope = conversation.machineID
-            }
         } else if showsAddPanel {
             Color.clear
                 .frame(width: PanelControlButton.size, height: PanelControlButton.size)
