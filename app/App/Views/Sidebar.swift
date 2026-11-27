@@ -172,6 +172,10 @@ struct SidebarNavigationPage: View {
     private var showsLocalWorkspace = true
     @AppStorage(WorkspaceSidebarVisibility.remoteWorkspaces.storageKey)
     private var showsRemoteWorkspaces = true
+    @AppStorage(RemoteWorkspaceSidebarStore.namesKey)
+    private var remoteWorkspaceNamesRaw = ""
+    @AppStorage(RemoteWorkspaceSidebarStore.orderKey)
+    private var remoteWorkspaceOrderRaw = ""
 
     @State private var presentedFolderID: String?
     @State private var recentsOpen = true
@@ -181,10 +185,15 @@ struct SidebarNavigationPage: View {
     @State private var renamedFolderName = ""
     @State private var deletingFolder: WorkspaceFolderRecord?
     @State private var editingReferenceFolderID: String?
+    @State private var renamingMachineID: String?
+    @State private var renamedMachineName = ""
 
     private var thisMachine: Machine? { machines.first(where: \.isThisMachine) }
 
-    private var otherMachines: [Machine] { machines.filter { !$0.isThisMachine } }
+    /// The remote workspaces in the order the person set in the sidebar.
+    private var otherMachines: [Machine] {
+        RemoteWorkspaceSidebarStore.ordered(machines.filter { !$0.isThisMachine }, in: remoteWorkspaceOrderRaw)
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -352,8 +361,9 @@ struct SidebarNavigationPage: View {
                         if otherMachines.isEmpty {
                             agentEmptyLabel("No remote workspaces yet")
                         }
-                        ForEach(otherMachines) { machine in
-                            machineSection(machine)
+                        let ordered = otherMachines
+                        ForEach(ordered) { machine in
+                            machineSection(machine, ordered: ordered)
                         }
                     }
                     .padding(.leading, 8)
@@ -371,15 +381,18 @@ struct SidebarNavigationPage: View {
     ) -> some View {
         let sections = FolderSections(folders: machine.map { machine in folders.filter { $0.machineID == machine.id } } ?? [])
         let counts = folderContentCounts
+        let workspaceTitle = machine.map {
+            $0.isThisMachine ? $0.name : RemoteWorkspaceSidebarStore.name(of: $0, in: remoteWorkspaceNamesRaw)
+        } ?? title
         VStack(alignment: .leading, spacing: 0) {
-            newFolderRow(key: key, machine: machine, workspaceTitle: machine?.name ?? title)
+            newFolderRow(key: key, machine: machine, workspaceTitle: workspaceTitle)
             ForEach(sections.pinned) { folder in
                 folderRow(folder, sectionFolders: sections.pinned,
-                          counts: counts[folder.id, default: .init()], workspaceTitle: machine?.name ?? title)
+                          counts: counts[folder.id, default: .init()], workspaceTitle: workspaceTitle)
             }
             ForEach(sections.unpinned) { folder in
                 folderRow(folder, sectionFolders: sections.unpinned,
-                          counts: counts[folder.id, default: .init()], workspaceTitle: machine?.name ?? title)
+                          counts: counts[folder.id, default: .init()], workspaceTitle: workspaceTitle)
             }
         }
     }
@@ -400,13 +413,60 @@ struct SidebarNavigationPage: View {
         }
     }
 
-    /// Another machine, online or offline, titled by its name.
+    /// Another machine, online or offline, titled by its sidebar name.
     @ViewBuilder
-    private func machineSection(_ machine: Machine) -> some View {
+    private func machineSection(_ machine: Machine, ordered: [Machine]) -> some View {
         let key = AgentDisclosureKey.machine(machine.id)
-        agentDisclosureHeading(title: machine.name, key: key)
+        let name = RemoteWorkspaceSidebarStore.name(of: machine, in: remoteWorkspaceNamesRaw)
+        let index = ordered.firstIndex(where: { $0.id == machine.id })
+        agentDisclosureHeading(title: name, key: key)
+            .contextMenu {
+                Button {
+                    RemoteWorkspaceSidebarStore.move(machine.id, by: -1, among: ordered, in: &remoteWorkspaceOrderRaw)
+                } label: {
+                    Label {
+                        Text("Move up")
+                    } icon: {
+                        LucideIcon(glyph: .arrowUp, size: 12)
+                    }
+                }
+                .disabled(index.map { $0 == 0 } ?? true)
+                Button {
+                    RemoteWorkspaceSidebarStore.move(machine.id, by: 1, among: ordered, in: &remoteWorkspaceOrderRaw)
+                } label: {
+                    Label {
+                        Text("Move down")
+                    } icon: {
+                        LucideIcon(glyph: .arrowDown, size: 12)
+                    }
+                }
+                .disabled(index.map { $0 == ordered.count - 1 } ?? true)
+                Button("Rename") {
+                    renamedMachineName = name
+                    renamingMachineID = machine.id
+                }
+            }
+            .popover(
+                isPresented: Binding(
+                    get: { renamingMachineID == machine.id },
+                    set: { if !$0, renamingMachineID == machine.id { renamingMachineID = nil } }
+                ),
+                arrowEdge: .trailing
+            ) {
+                FolderNamePopover(
+                    title: "Rename workspace",
+                    placeholder: "Workspace name",
+                    actionTitle: "Rename",
+                    name: $renamedMachineName,
+                    onCancel: { renamingMachineID = nil },
+                    onCommit: {
+                        renamingMachineID = nil
+                        RemoteWorkspaceSidebarStore.rename(machine, to: renamedMachineName, in: &remoteWorkspaceNamesRaw)
+                    }
+                )
+            }
         if agentSectionExpanded(key) {
-            workspaceContents(key: key, title: machine.name, machine: machine)
+            workspaceContents(key: key, title: name, machine: machine)
         }
     }
 
