@@ -3,7 +3,9 @@ import assert from 'node:assert/strict';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { SqliteStorage } from '@earendil-works/pi-durable/storage/sqlite';
 import { openNodeSqliteDatabase } from '@earendil-works/pi-durable/storage/sqlite/node';
+import { Session } from '../src/session.mjs';
 import { USAGE_TABLE, countingSummaries, createUsageTable, saveSummaryUsage } from '../src/usage.mjs';
 
 const summary = { messages: [{ role: 'system', content: 'You are a context summarization assistant. Your task is to read…' }, { role: 'user', content: 'x' }] };
@@ -72,4 +74,50 @@ test("a summariser call while Pi Durable holds its write transaction neither wai
   release();
   await writing;
   assert.equal((await rows(database)).length, 1);
+});
+
+test('a store busy elsewhere is tried again under the same call, and a save that keeps failing is reported', async t => {
+  const database = await store(t);
+  const tried = [];
+  let busy = 2;
+  const flaky = {
+    run: async (sql, ...values) => {
+      tried.push(values[0]);
+      if (busy-- > 0) throw Object.assign(new Error('database is locked'), { errcode: 5 });
+      return database.run(sql, ...values);
+    },
+  };
+  const logged = [];
+  await saveSummaryUsage(flaky, 'session-1', reply(10), { wait: 1, log: line => logged.push(line) });
+  assert.equal(tried.length, 3);
+  assert.equal(new Set(tried).size, 1);
+  assert.equal((await rows(database)).length, 1);
+  assert.deepEqual(logged, []);
+
+  busy = Infinity;
+  await saveSummaryUsage(flaky, 'session-1', reply(10), { wait: 1, log: line => logged.push(line) });
+  assert.equal(logged.length, 1);
+  assert.match(logged[0], /not saved: database is locked/);
+  assert.equal((await rows(database)).length, 1);
+});
+
+test('a usage table that cannot be made is reported, and the session goes on without it', async t => {
+  const logged = [];
+  const made = await createUsageTable({ exec: async () => { throw new Error('disk I/O error'); } }, line => logged.push(line));
+  assert.equal(made, false);
+  assert.match(logged[0], /not saved for this session: disk I\/O error/);
+  assert.equal(await createUsageTable(await store(t)), true);
+});
+
+test('a session that fails to start after opening its store closes it', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'pi-usage-session-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const close = SqliteStorage.prototype.close;
+  let closed = 0;
+  SqliteStorage.prototype.close = function (...args) { closed += 1; return close.apply(this, args); };
+  t.after(() => { SqliteStorage.prototype.close = close; });
+  // No model runtime: the harness cannot open.
+  await assert.rejects(Session.open({ models: {}, dataDirectory: root, sessionId: '0190a000-0000-7000-8000-000000000001', cwd: root,
+    mcpServers: [], notify: () => {}, create: true }));
+  assert.ok(closed >= 1);
 });

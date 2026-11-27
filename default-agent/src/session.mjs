@@ -141,10 +141,22 @@ export class Session {
     ] }));
     const database = await openNodeSqliteDatabase(path);
     this.storage = await SqliteStorage.open(database, { prefix: tablePrefix(this.sessionId) });
-    await createUsageTable(database);
+    try {
+      await this.begin(database, registry);
+    } catch (error) {
+      // A session that could not start leaves its store closed.
+      await this.harness?.close(context).catch(() => {});
+      await this.storage.close().catch(() => {});
+      throw error;
+    }
+  }
+  async begin(database, registry) {
+    // Each compaction summary's usage is saved with its time once it returns.
+    const models = await createUsageTable(database)
+      ? countingSummaries(this.models.runtime, reply => saveSummaryUsage(database, this.sessionId, reply))
+      : this.models.runtime;
     this.harness = await Harness.open(this.storage, {
-      // Each compaction summary's usage is saved with its time once it returns.
-      models: countingSummaries(this.models.runtime, reply => saveSummaryUsage(database, this.sessionId, reply)), registry,
+      models, registry,
       env: target => new NodeExecutionEnv({ cwd: target.cwd ?? this.cwd }),
       settings: { toolExecution: 'parallel', compaction: { enabled: true } },
     }, context);
