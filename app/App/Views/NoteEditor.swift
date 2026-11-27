@@ -1733,7 +1733,7 @@ struct NoteFormattingBar: View {
     private let fontSizes = [11.0, 12, 13, 14, 16, 18, 21, 24, 30, 36]
 
     var body: some View {
-        NoteFormattingFlowLayout(horizontalSpacing: 6, verticalSpacing: 6) {
+        FlowLayout(horizontalSpacing: 6, verticalSpacing: 6) {
             Menu {
                 ForEach(fontFamilies, id: \.self) { family in
                     Button(family) {
@@ -2005,64 +2005,3 @@ private struct NoteFormattingButtonStyle: ButtonStyle {
     }
 }
 
-private struct NoteFormattingFlowLayout: Layout {
-    let horizontalSpacing: CGFloat
-    let verticalSpacing: CGFloat
-
-    func sizeThatFits(
-        proposal: ProposedViewSize,
-        subviews: Subviews,
-        cache: inout ()
-    ) -> CGSize {
-        let result = layout(subviews: subviews, width: proposal.width ?? .infinity)
-        return CGSize(width: proposal.width ?? result.width, height: result.height)
-    }
-
-    func placeSubviews(
-        in bounds: CGRect,
-        proposal: ProposedViewSize,
-        subviews: Subviews,
-        cache: inout ()
-    ) {
-        var x = bounds.minX
-        var y = bounds.minY
-        var lineHeight: CGFloat = 0
-
-        for subview in subviews {
-            let size = subview.sizeThatFits(.unspecified)
-            if x > bounds.minX, x + size.width > bounds.maxX {
-                x = bounds.minX
-                y += lineHeight + verticalSpacing
-                lineHeight = 0
-            }
-            subview.place(
-                at: CGPoint(x: x, y: y),
-                anchor: .topLeading,
-                proposal: ProposedViewSize(size)
-            )
-            x += size.width + horizontalSpacing
-            lineHeight = max(lineHeight, size.height)
-        }
-    }
-
-    private func layout(subviews: Subviews, width: CGFloat) -> CGSize {
-        var x: CGFloat = 0
-        var y: CGFloat = 0
-        var lineHeight: CGFloat = 0
-        var contentWidth: CGFloat = 0
-
-        for subview in subviews {
-            let size = subview.sizeThatFits(.unspecified)
-            if x > 0, x + size.width > width {
-                x = 0
-                y += lineHeight + verticalSpacing
-                lineHeight = 0
-            }
-            contentWidth = max(contentWidth, x + size.width)
-            x += size.width + horizontalSpacing
-            lineHeight = max(lineHeight, size.height)
-        }
-
-        return CGSize(width: contentWidth, height: y + lineHeight)
-    }
-}

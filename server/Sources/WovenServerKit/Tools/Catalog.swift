@@ -225,6 +225,8 @@ private let sessionTools: [WovenTool] = [
       let session = try await call.tools.session(try call.arguments.string("sessionID"))
       let limit = min(max(call.arguments.int("limit") ?? 40, 1), 200)
       var items = try await call.tools.library.items(sessionID: session.id, afterSequence: call.arguments.int("afterSequence") ?? 0)
+      // A turn's end says nothing, so it neither shows nor takes a place in `limit`.
+      items.removeAll { if case .notice(let notice) = $0.content { notice.kind == .turnEnded } else { false } }
       if call.arguments.int("afterSequence") == nil { items = Array(items.suffix(limit)) } else { items = Array(items.prefix(limit)) }
       let states = await call.tools.runStates(of: [session.machineID])
       var result: [String] = []
@@ -369,8 +371,12 @@ private let visualReplyTools: [WovenTool] = [
       Show a chart, table, diagram or anything interactive in this chat as a visual reply: one whole self-contained \
       HTML document, given as `html` or as the `path` of an HTML file you wrote.
       Styles and scripts go inline; libraries may load over HTTPS. It appears above your text and stays \
-      in the chat. It is not a page or an app: it is not in the library and cannot be edited. It fits its content; \
-      `height` is only where it starts, and `title` defaults to the document's own <title>. Absolute paths to local \
+      in the chat. It is not a page or an app: it is not in the library and cannot be edited. It fills the chat's \
+      width unless you pass `width`, so pass `width` for anything narrower than the chat, such as a small table \
+      (about 320). Its height fits its content; `height` is only where it starts, and `title` defaults to the \
+      document's own <title>. The chat shows `title` \
+      above it, so do not repeat it inside the document. The chat gives the body a little padding; draw no outer \
+      card or border of your own. Absolute paths to local \
       images in it are embedded; every one must be there. Heights in vh, vmin or vmax are refused, since the frame \
       fits its content. It runs sandboxed, with no access to Woven Matter, your tools or this chat. For something \
       the person wants to keep and change, make an app with `create_artifact` instead.
@@ -378,7 +384,8 @@ private let visualReplyTools: [WovenTool] = [
     input: schema(["html": text("The whole self-contained HTML document, at most 512,000 characters. Give this or `path`."),
                    "path": text("Instead of `html`: the absolute path of an HTML file on this machine, written with your own tools."),
                    "title": text("A short title, at most 200 characters; default the document's <title>."),
-                   "height": integer("Where its height starts, 80 to 2000 pixels; default 320.")]),
+                   "height": integer("Where its height starts, 80 to 2000 pixels; default 320."),
+                   "width": integer("How wide it needs to be, 240 to 1600 CSS pixels (the chat shows at most 720), for something narrower than the chat such as a small table (one usually needs about 320); leave it out to fill the chat's width.")]),
     output: shownShape.schema,
     run: { call in
       let html = try VisualReplies.authored(call.arguments, fromBot: call.caller.botID != nil)
@@ -388,6 +395,10 @@ private let visualReplyTools: [WovenTool] = [
       let height = call.arguments.int("height") ?? 320
       guard call.arguments["height"] == nil || call.arguments.int("height") != nil, (80...2000).contains(height) else {
         throw ToolFailure("Give `height` from 80 to 2000, or leave it out.")
+      }
+      let width = call.arguments.int("width")
+      guard call.arguments["width"] == nil || width.map({ (240...1600).contains($0) }) == true else {
+        throw ToolFailure("Give `width` from 240 to 1600, or leave it out.")
       }
       // A bot runs in its own machine: nothing on this one is read for it.
       let fromBot = call.caller.botID != nil
@@ -401,7 +412,7 @@ private let visualReplyTools: [WovenTool] = [
       }
       let tools = call.tools
       let data = Data(prepared.html.utf8)
-      let published = VisualReply(title: title, height: height, digest: try await tools.library.storeContent(data),
+      var published = VisualReply(title: title, height: height, width: width, digest: try await tools.library.storeContent(data),
                                size: Int64(data.count))
       // A bot's chat and Forum seat are its runtime's own; the visual reply reaches it with the
       // call's result, and from a seat the runtime posts it to the Forum.
@@ -413,6 +424,8 @@ private let visualReplyTools: [WovenTool] = [
             + "written and will not show. Put images in the HTML as data URIs."),
         ], meta: .object(["wovenVisualReply": try JSONValue(encoding: published)]))
       }
+      // How the page starts, so a chat can place its caption before the page has loaded.
+      published.opensWithTitle = VisualReply.lead(VisualReply.sourceLead(html: html), isTitle: title)
       try await tools.sessions.host(for: sessionID).publish(published)
       return shownShape.result(["shownIn": .string("chat"), "title": .text(title)])
     }),
@@ -919,12 +932,14 @@ private let uiTools: [WovenTool] = [
       Check a visual reply before publishing it with `render_html`: get a PNG of it as the chat shows it.
       Give the same `html` or `path`. With the image come its console messages, its content height, and \
       `missingImages`: local image paths it refers to that are missing, \
-      unreadable or not images. Width defaults to 728 CSS pixels; use 390 for a phone. Appearance defaults to dark. \
+      unreadable or not images. Width defaults to 720 CSS pixels, the width of the chat's frame, and a wider one is shown at 720 \
+      as in the chat; when you will pass \
+      `render_html` a `width`, pass the same one here. Use 390 for a phone. Appearance defaults to dark. \
       Nothing is saved. Needs the Woven Matter app open on this machine; `render_html` does not.
       """,
     input: schema(["html": text("The whole self-contained HTML document, at most 512,000 characters. Give this or `path`."),
                    "path": text("Instead of `html`: the absolute path of an HTML file on this machine, written with your own tools."),
-                   "width": integer("240 to 1600 CSS pixels; default 728."),
+                   "width": integer("240 to 1600 CSS pixels; default 720."),
                    "appearance": choice(["light", "dark"], "Default dark.")]),
     output: previewShape.schema,
     images: true,
@@ -933,7 +948,7 @@ private let uiTools: [WovenTool] = [
       // A bot runs in its own machine: nothing on this one is read for it.
       let fromBot = call.caller.botID != nil
       let prepared = try VisualReplies.prepare(try VisualReplies.authored(call.arguments, fromBot: fromBot), readingDisk: !fromBot)
-      let width = call.arguments.int("width") ?? 728
+      let width = call.arguments.int("width") ?? 720
       guard call.arguments["width"] == nil || call.arguments.int("width") != nil, (240...1600).contains(width) else {
         throw ToolFailure("Give `width` from 240 to 1600.")
       }

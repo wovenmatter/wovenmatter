@@ -192,10 +192,14 @@ actor OpenCodeHost {
     sessions[session.nativeHandle] = session
   }
 
-  /// One user is done; the process ends when none is left.
-  func release(_ handle: String?, generation: Int) {
+  /// One user is done; the process ends when none is left. Its session's
+  /// registration goes only if it is still that session's: a newer session
+  /// of the same chat (opened while this one stopped) keeps its own. The
+  /// generation is the process's, which both share, so it cannot tell.
+  func release(_ session: OpenCodeSession?, generation: Int) {
     guard generation == server?.generation else { return }
-    if let handle {
+    if let session, sessions[session.nativeHandle] === session {
+      let handle = session.nativeHandle
       sessions[handle] = nil
       parents = parents.filter { $0.value != handle }
     }
@@ -489,7 +493,7 @@ final class OpenCodeSession: RuntimeSession {
     // The process may serve other sessions, so a running turn is stopped first.
     if state.withLock({ $0.running }) { try? await interrupt() }
     guard end() else { return }
-    await host.release(nativeHandle, generation: generation)
+    await host.release(self, generation: generation)
     emit.yield(.exited)
     emit.finish()
   }
@@ -517,12 +521,14 @@ final class OpenCodeSession: RuntimeSession {
       case "session.model.selected", "session.agent.selected":
         reloadSoon()
       default:
-        let events = state.withLock { state in
-          var events = state.projection.receive(event)
+        let events = state.withLock { state -> [RuntimeEvent] in
           // An execution OpenCode started by itself runs and ends the same
-          // way. Only its start marks it running: an event of an execution
-          // already ended (a tool closing after an interrupt) can come later.
-          if event["type"]?.string == "session.execution.started" { state.running = true }
+          // way. An event of an execution already ended (a tool closing after
+          // an interrupt) is dropped by the projection, before it changes
+          // anything; any other output starts a turn, even when the stream
+          // missed the execution's start.
+          var events = state.projection.receive(event, running: state.running)
+          if event["type"]?.string == "session.execution.started" || !events.isEmpty { state.running = true }
           if let end = events.firstIndex(where: { if case .turnFinished = $0 { true } else { false } }) {
             // Whatever the turn still asked is withdrawn with it.
             events.insert(contentsOf: state.prompts.keys.sorted().map { RuntimeEvent.promptResolved(id: $0) }, at: end)

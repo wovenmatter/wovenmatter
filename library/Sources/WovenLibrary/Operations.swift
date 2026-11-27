@@ -108,14 +108,18 @@ extension Library {
     }
   }
 
+  /// Leaves out a turn's end, which says nothing a list or a reader sees.
+  static let shownItem = "NOT (kind = 'notice' AND json_extract(body, '$.notice.kind') = 'turnEnded')"
+
   /// A session row with what lists show of its transcript, from its newest
-  /// item and its newest message, in one query.
+  /// shown item and its newest message, in one query.
   private static let sessionSelect = """
     SELECT s.*, COALESCE(last.created_at, s.created_at) AS last_at, last.kind AS last_kind,
       substr(json_extract(message.body, '$.text'), 1, 400) AS preview_text
     FROM sessions s
     LEFT JOIN session_items last ON last.id = (
-      SELECT id FROM session_items WHERE session_id = s.id AND deleted = 0 ORDER BY sequence DESC LIMIT 1)
+      SELECT id FROM session_items WHERE session_id = s.id AND deleted = 0 AND \(shownItem)
+        ORDER BY sequence DESC LIMIT 1)
     LEFT JOIN session_items message ON message.id = (
       SELECT id FROM session_items WHERE session_id = s.id AND deleted = 0
         AND kind IN ('userMessage', 'assistantMessage') ORDER BY sequence DESC LIMIT 1)
@@ -144,8 +148,9 @@ extension Library {
       var changes = fixed
       if let read {
         // Read up to the newest item, by the owner's clock that stamped it.
-        let newest = try writer.db.query("SELECT MAX(created_at) AS newest FROM session_items WHERE session_id = ? AND deleted = 0",
-                                         [.text(id)]).first?.integer("newest") ?? 0
+        let newest = try writer.db.query(
+          "SELECT MAX(created_at) AS newest FROM session_items WHERE session_id = ? AND deleted = 0 AND \(Self.shownItem)",
+          [.text(id)]).first?.integer("newest") ?? 0
         changes["read_at"] = .integer(read ? newest : 0)
       }
       changes = changes.filter { row[$0.key] != $0.value }
@@ -165,8 +170,11 @@ extension Library {
 
   /// Saves a finished item of a session this machine owns, as the next in
   /// its sequence. Only the owning machine writes a session's items.
+  /// `endingTurn` also clears the session's running turn in the same write,
+  /// so a turn's saved end and its flag are never apart.
   public func appendItem(sessionID: String, id: String = UUID().uuidString.lowercased(),
-                         content: ItemContent, author: ItemAuthor? = nil, createdAt: Date = Date()) async throws -> SessionItem {
+                         content: ItemContent, author: ItemAuthor? = nil, createdAt: Date = Date(),
+                         endingTurn: Bool = false) async throws -> SessionItem {
     let body = String(decoding: try Wire.encoder.encode(content), as: UTF8.self)
     let machineID = machineID
     // Stored to the millisecond, so the item announced equals the item read back.
@@ -180,6 +188,10 @@ extension Library {
       }
       let sequence = try Self.putItem(id: id, sessionID: sessionID, content: content, body: body, author: author,
                                       createdAt: createdAt, writer)
+      if endingTurn {
+        try writer.db.run("UPDATE native_sessions SET turn_running = 0, updated_at = ? WHERE session_id = ?",
+                          [.integer(Writer.now()), .text(sessionID)])
+      }
       return SessionItem(id: id, sessionID: sessionID, sequence: sequence, createdAt: createdAt, content: content,
                          author: author)
     }

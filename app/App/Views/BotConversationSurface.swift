@@ -46,7 +46,6 @@ struct BotConversationSurface: View {
     let headerInsets: BotHeaderInsets
     let focusGeneration: Int?
     let startsComposerCollapsed: Bool
-    let usesCompactSpacing: Bool
     let showsClosePanel: Bool
     let showsAddPanel: Bool
     let onActivate: () -> Void
@@ -95,7 +94,6 @@ struct BotConversationSurface: View {
                     headerInsets: headerInsets,
                     focusGeneration: focusGeneration,
                     startsComposerCollapsed: startsComposerCollapsed,
-                    usesCompactSpacing: usesCompactSpacing,
                     showsClosePanel: showsClosePanel,
                     showsAddPanel: showsAddPanel,
                     onActivate: onActivate,
@@ -124,7 +122,6 @@ struct BotConversationSurface: View {
                 headerInsets: headerInsets,
                 focusGeneration: focusGeneration,
                 startsComposerCollapsed: startsComposerCollapsed,
-                usesCompactSpacing: usesCompactSpacing,
                 showsClosePanel: showsClosePanel,
                 showsAddPanel: showsAddPanel,
                 onActivate: onActivate,
@@ -216,7 +213,6 @@ private struct BotConversationWorkspace: View {
     let headerInsets: BotHeaderInsets
     let focusGeneration: Int?
     let startsComposerCollapsed: Bool
-    let usesCompactSpacing: Bool
     let showsClosePanel: Bool
     let showsAddPanel: Bool
     let onActivate: () -> Void
@@ -233,7 +229,7 @@ private struct BotConversationWorkspace: View {
             HStack(spacing: 0) {
                 if split {
                     pane(conversationID: nil, insets: BotHeaderInsets(left: headerInsets.left, right: 0),
-                         showsClose: showsClosePanel, showsAdd: false, compact: true)
+                         showsClose: showsClosePanel, showsAdd: false)
                     BotThreadResizer(threadWidth: $threadWidth, available: geometry.size.width)
                     threadPane(wide: wide, split: true, insets: BotHeaderInsets(left: 0, right: headerInsets.right), showsClose: false, showsAdd: showsAddPanel)
                         .frame(width: BotThreadSplit.clamped(threadWidth, available: geometry.size.width))
@@ -247,7 +243,7 @@ private struct BotConversationWorkspace: View {
     }
 
     private func pane(conversationID: Int?, insets: BotHeaderInsets, showsClose: Bool, showsAdd: Bool,
-                      compact: Bool = false, actions: [BotPaneAction] = []) -> some View {
+                      actions: [BotPaneAction] = []) -> some View {
         BotConversationPane(
             bots: bots,
             bot: bot,
@@ -257,7 +253,6 @@ private struct BotConversationWorkspace: View {
             headerActions: actions,
             focusGeneration: focusGeneration,
             startsComposerCollapsed: startsComposerCollapsed,
-            usesCompactSpacing: usesCompactSpacing || compact,
             showsClosePanel: showsClose,
             showsAddPanel: showsAdd,
             onActivate: onActivate,
@@ -281,7 +276,7 @@ private struct BotConversationWorkspace: View {
         actions.append(BotPaneAction(glyph: .close, title: "Back to Main") {
             onRoute(BotTarget(machineID: target.machineID, botID: bot.id))
         })
-        return pane(conversationID: conversationID, insets: insets, showsClose: showsClose, showsAdd: showsAdd, compact: split, actions: actions)
+        return pane(conversationID: conversationID, insets: insets, showsClose: showsClose, showsAdd: showsAdd, actions: actions)
     }
 }
 
@@ -311,7 +306,6 @@ private struct BotConversationPane: View {
     let headerActions: [BotPaneAction]
     let focusGeneration: Int?
     let startsComposerCollapsed: Bool
-    let usesCompactSpacing: Bool
     let showsClosePanel: Bool
     let showsAddPanel: Bool
     let onActivate: () -> Void
@@ -323,6 +317,8 @@ private struct BotConversationPane: View {
     @Environment(\.wovenTheme) private var theme
     @State private var attached: BotChatStore?
     @State private var following = true
+    /// The newest content is out of view or behind the composer stack.
+    @State private var endObscured = false
     @State private var isUserScrolling = false
     @State private var shownMessages = BotConversationPane.messagePage
     @State private var bottomStackHeight: CGFloat = 0
@@ -357,7 +353,7 @@ private struct BotConversationPane: View {
             if let status = bot.modelStatus, let statusKey = statusKey(status), statusKey != dismissedStatus {
                 BotModelStatusBanner(text: PiBotModelStatusText(status: status, botName: bot.name),
                                      showsFixes: status.kind == .paused || status.kind == .fallback) { dismissedStatus = statusKey }
-                    .frame(maxWidth: 768)
+                    .frame(maxWidth: ConversationMetrics.column)
                     .padding(.horizontal, 32)
                     .padding(.bottom, 8)
             }
@@ -435,34 +431,26 @@ private struct BotConversationPane: View {
                     transcriptContent(proxy)
                     Color.clear
                         .frame(height: bottomClearance)
-                        .padding(.top, 24)
                         .id(Self.endID)
                 }
-                .frame(maxWidth: 768)
+                .frame(maxWidth: ConversationMetrics.column)
                 .frame(maxWidth: .infinity)
                 .padding(.horizontal, 32)
                 .padding(.top, 16)
             }
             .scrollIndicators(.never)
-            // Text fades under the header instead of being cut off at it.
-            .mask {
-                VStack(spacing: 0) {
-                    LinearGradient(colors: [.clear, .black], startPoint: .top, endPoint: .bottom).frame(height: 14)
-                    Color.black
-                }
-            }
+            // Opening or selecting something is the reader taking over: the
+            // newest reply no longer pulls the view down.
+            .environment(\.conversationTranscriptInteraction) { following = false }
             .defaultScrollAnchor(isNewThread ? .top : .bottom, for: .initialOffset)
             .defaultScrollAnchor(.top, for: .sizeChanges)
             .onScrollPhaseChange { _, phase in
                 isUserScrolling = phase == .interacting || phase == .tracking || phase == .decelerating
             }
             .onScrollGeometryChange(for: ConversationGeometry.self) { geometry in
-                ConversationGeometry(
-                    contentHeight: geometry.contentSize.height,
-                    isNearBottom: geometry.visibleRect.maxY >= geometry.contentSize.height - 90,
-                    viewportHeight: geometry.containerSize.height
-                )
+                ConversationGeometry(geometry)
             } action: { old, new in
+                if new.isObscured != endObscured { endObscured = new.isObscured }
                 let resized = old.contentHeight != new.contentHeight || old.viewportHeight != new.viewportHeight
                 if isNewThread {
                     // A new thread opens at the top, with its starting message in view.
@@ -474,7 +462,7 @@ private struct BotConversationPane: View {
                     }
                 } else if !resized || isUserScrolling {
                     // Any movement of the reader's own decides whether the newest reply stays in view.
-                    following = new.isNearBottom
+                    following = new.isAtLiveEdge
                 }
             }
             .onChange(of: controller.loading) { _, loading in
@@ -486,16 +474,9 @@ private struct BotConversationPane: View {
                 guard !controller.loading, following, !isNewThread else { return }
                 jumpToEnd(proxy)
             }
-            .overlay(alignment: .bottomTrailing) {
-                if !following {
-                    Button("Latest reply", systemImage: "arrow.down") {
-                        following = true
-                        jumpToEnd(proxy)
-                    }
-                    .buttonStyle(WovenQuietButtonStyle())
-                    .padding(.trailing, 32)
-                    .padding(.bottom, bottomClearance)
-                }
+            .conversationEdges(stackHeight: bottomStackHeight, jumpLabel: following || !endObscured ? nil : "Latest reply") {
+                following = true
+                jumpToEnd(proxy)
             }
         }
         .simultaneousGesture(TapGesture().onEnded { onActivate() })
@@ -588,38 +569,22 @@ private struct BotConversationPane: View {
             // A failed reply already shows its error on the message itself.
             if let error = controller.error, error != entries.last?.error {
                 BotDismissibleError(text: error) { controller.error = nil }
-                    .frame(maxWidth: 768)
-                    .padding(.horizontal, showsClosePanel || showsAddPanel ? PanelControlButton.size + 8 : 0)
+                    .frame(maxWidth: ConversationMetrics.column)
             }
-            HStack(alignment: .bottom, spacing: 8) {
-                Group {
-                    if showsClosePanel {
-                        PanelControlButton(glyph: .panelRightOpen, accessibilityLabel: "Remove panel", help: "Remove panel", action: onClosePanel)
-                    } else if showsAddPanel {
-                        Color.clear
-                            .frame(width: PanelControlButton.size, height: PanelControlButton.size)
-                            .allowsHitTesting(false)
-                            .accessibilityHidden(true)
-                    }
-                }
-                .padding(.bottom, ConversationComposer.verticalPadding)
-                composer
-                    .frame(maxWidth: 768)
-                Group {
-                    if showsAddPanel {
-                        PanelControlButton(glyph: .panelLeftOpen, accessibilityLabel: "Add panel", help: "Add panel", action: onAddPanel)
-                    } else if showsClosePanel {
-                        Color.clear
-                            .frame(width: PanelControlButton.size, height: PanelControlButton.size)
-                            .allowsHitTesting(false)
-                            .accessibilityHidden(true)
-                    }
-                }
-                .padding(.bottom, ConversationComposer.verticalPadding)
-            }
+            composer
+                .frame(maxWidth: ConversationMetrics.column)
         }
         .frame(maxWidth: .infinity)
-        .padding(.horizontal, usesCompactSpacing ? 12 : 32)
+        .padding(.horizontal, ConversationMetrics.sideInset)
+        .conversationPanelControls {
+            if showsClosePanel {
+                PanelControlButton(glyph: .panelRightOpen, accessibilityLabel: "Remove panel", help: "Remove panel", action: onClosePanel)
+            }
+        } trailing: {
+            if showsAddPanel {
+                PanelControlButton(glyph: .panelLeftOpen, accessibilityLabel: "Add panel", help: "Add panel", action: onAddPanel)
+            }
+        }
         .padding(.top, 8)
         .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { bottomStackHeight = max(0, $0) }
         .padding(.bottom, ConversationBottomOverlayLayout.bottomOffset)
@@ -752,33 +717,28 @@ private struct BotMessageRow: View {
     private var visualReplyOnly: Bool { entry.text.isEmpty && !entry.visualReplies.isEmpty && entry.error == nil }
 
     var body: some View {
-        HStack(spacing: 0) {
-            if entry.isUser { Spacer(minLength: 72) }
-            VStack(alignment: entry.isUser ? .trailing : .leading, spacing: 6) {
+        ConversationMessageRowLayout(trailing: entry.isUser) {
+            VStack(alignment: entry.isUser ? .trailing : .leading, spacing: ConversationMetrics.labelGap) {
                 // A visual reply on its own continues the reply above it.
                 if !entry.isUser && !visualReplyOnly {
                     Text(botName)
                         .font(.system(size: 12, weight: .medium))
                         .foregroundStyle(WovenPalette.foreground)
-                        .padding(.horizontal, 4)
                 }
                 if !entry.text.isEmpty {
                     if entry.isUser {
                         ConversationUserBubble(content: entry.text.trimmingCharacters(in: .whitespacesAndNewlines)) { EmptyView() }
                     } else {
                         ConversationResponse(content: entry.text, isStreaming: false, showsCopyButton: false)
-                            .padding(.horizontal, 4)
-                            .padding(.vertical, 2)
                     }
                 }
                 ForEach(entry.visualReplies, id: \.id) { reply in
-                    ConversationHTMLRenderView(reference: reply).padding(.horizontal, 4)
+                    ConversationHTMLRenderView(reference: reply)
                 }
                 if entry.isStopped {
                     Text("Stopped")
                         .font(.system(size: 11.5))
                         .foregroundStyle(WovenPalette.mutedForeground)
-                        .padding(.horizontal, 4)
                 }
                 if let error = entry.error {
                     InlineError(text: error)
@@ -791,7 +751,6 @@ private struct BotMessageRow: View {
                 if !visualReplyOnly { actions }
             }
             .frame(maxWidth: entry.isUser ? nil : .infinity, alignment: entry.isUser ? .trailing : .leading)
-            if !entry.isUser { Spacer(minLength: 0) }
         }
         .fixedSize(horizontal: false, vertical: true)
         .contentShape(Rectangle())
@@ -887,8 +846,7 @@ struct BotPendingMessage: View {
     let text: String
 
     var body: some View {
-        HStack(spacing: 0) {
-            Spacer(minLength: 72)
+        ConversationMessageRowLayout {
             ConversationUserBubble(content: text) { EmptyView() }
                 .opacity(0.6)
         }
@@ -901,26 +859,17 @@ private struct BotStreamingMessage: View {
     let text: String?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: ConversationMetrics.labelGap) {
             Text(botName)
                 .font(.system(size: 12, weight: .medium))
                 .foregroundStyle(WovenPalette.foreground)
-                .padding(.horizontal, 4)
             if let text, !text.isEmpty {
                 ConversationResponse(content: text, isStreaming: true, showsCopyButton: false)
-                    .padding(.horizontal, 4)
-                    .padding(.vertical, 2)
+                ConversationRunningDots()
             } else {
-                HStack(spacing: 8) {
-                    Image(systemName: "brain").frame(width: 17)
-                        .foregroundStyle(WovenPalette.mutedForeground)
-                    Text("Thinking…")
-                        .font(.system(size: 13))
-                        .foregroundStyle(WovenPalette.mutedForeground)
-                }
-                .padding(.horizontal, 4)
+                ConversationThinkingLabel(text: "Thinking…")
+                ConversationRunningDots().padding(.leading, ConversationMetrics.textInset)
             }
-            ConversationRunningDots().padding(.horizontal, 4)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityElement(children: .combine)

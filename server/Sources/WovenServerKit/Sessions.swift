@@ -133,6 +133,8 @@ actor SessionManager {
   func start() async {
     for sessionID in (try? await library.sessionsStoppedMidTurn()) ?? [] {
       try? await library.setTurnRunning(sessionID, false)
+      // A turn's end clears its flag in the same write, so a flag still set
+      // is a turn that never ended.
       guard (try? await library.session(sessionID)) != nil else { continue }
       _ = try? await library.appendItem(sessionID: sessionID, content: .notice(Notice(
         kind: .interrupted, text: "The server stopped while this reply was being written, so it may be cut short.")))
@@ -272,6 +274,8 @@ actor SessionHost {
   /// The turn running continues a goal, and whether it has said or done anything.
   private var goalTurn = false
   private var turnActed = false
+  /// Stop was asked while the running turn ran, so it ends as stopped.
+  private var stopAsked = false
   private var idleGoalTurns = 0
   /// The turn running is one the runtime started by itself; a goal neither
   /// counts it nor continues after it.
@@ -279,6 +283,16 @@ actor SessionHost {
   /// Output of a tool call in progress past `ToolOutput.limit`: its start,
   /// its latest end and how much fell between, by item.
   private var overflow: [String: (head: String, tail: String, omitted: Int)] = [:]
+  /// Calls seen starting, which numbers each call's `ToolCallStart.order`.
+  /// It need not outlive this host: two calls share a start's `after` only
+  /// when nothing was saved between them, and a call saved after it
+  /// started raises `after` for every later one, while one this host never
+  /// saved is gone with it. So calls compared by `order` are always this
+  /// host's.
+  private var callsStarted = 0
+  /// The sequence of the session's last saved item, read when the runtime
+  /// opens and kept by each save, so a call's start needs no read.
+  private var lastSequence: Int?
   private let firstMessages: FirstMessageHook?
 
   init(sessionID: String, library: Library, runtime: any Runtime, gone: Bool, board: RunBoard,
@@ -391,6 +405,7 @@ actor SessionHost {
     goalTurn = continuesGoal
     runtimeTurn = false
     turnActed = false
+    stopAsked = false
     let empty = (try? await library.hasItems(sessionID)) == false
     let first = author == nil && empty
     let live = try await openLive()
@@ -400,8 +415,7 @@ actor SessionHost {
     do {
       try await live.send(turn)
     } catch {
-      try? await library.setTurnRunning(sessionID, false)
-      setRun(.idle)
+      await endTurn()
       throw ProtocolError(.failed, "The runtime did not take the turn: \(error)")
     }
     if first { firstMessages?.tell(sessionID, text) }
@@ -580,6 +594,7 @@ actor SessionHost {
     interrupted = true
     stops += 1
     clearPrompts()
+    if running { stopAsked = true }
     if running, let stopper { stoppedBy = stopper }
     try await live?.interrupt()
     return running
@@ -597,6 +612,7 @@ actor SessionHost {
       try? await finish(.notice(Notice(kind: .interrupted, text: "The session was stopped while this reply was being written.")),
                         id: UUID().uuidString.lowercased())
     }
+    await endTurn()
   }
 
   /// The session was deleted: stop the process and end every subscription.
@@ -605,6 +621,7 @@ actor SessionHost {
     defer { leave() }
     await shutDown()
     dropOpenItems()
+    await endTurn()
     board.set(SessionRunState(sessionID: sessionID, run: .idle))
     for continuation in subscribers.values { continuation.finish() }
     subscribers.removeAll()
@@ -641,10 +658,13 @@ actor SessionHost {
     case .messageFinished:
       await saving { try await self.finishAssistant() }
     case .tool(let callID, let reported, let finished):
-      let call = VisualReplies.withoutVisualReply(reported)
+      var call = VisualReplies.withoutVisualReply(reported)
       if call.kind != .thinking { turnActed = true }
       await saving { try await self.finishAssistant() }
       if let id = toolItemIDs[callID] {
+        if let item = inProgress.first(where: { $0.id == id }), case .toolCall(let previous) = item.content {
+          call = Self.updated(call, from: previous)
+        }
         let whole = withOutput(call, of: id)
         if finished {
           toolItemIDs[callID] = nil
@@ -658,6 +678,12 @@ actor SessionHost {
         if finished {
           await saving { try await self.finish(.toolCall(call), id: id) }
         } else {
+          // A call seen starting carries where it started; one that arrives
+          // already finished has no start.
+          if let lastSequence {
+            callsStarted += 1
+            call.start = ToolCallStart(after: lastSequence, order: callsStarted)
+          }
           let item = LiveItem(id: id, content: .toolCall(call))
           toolItemIDs[callID] = id
           inProgress.append(item)
@@ -740,6 +766,7 @@ actor SessionHost {
     if let live { return live }
     guard let session = try await library.session(sessionID) else { throw ProtocolError(.notFound, "No session \(sessionID).") }
     let native = try await library.nativeSession(for: sessionID)
+    lastSequence = try await library.items(sessionID: sessionID, beforeSequence: .max, limit: 1).last?.sequence ?? 0
     var directory = session.directory
     if directory.isEmpty, let folderID = session.folderID { directory = try await library.folder(folderID)?.path ?? "" }
     guard !directory.isEmpty else { throw ProtocolError(.failed, "This session has no directory to work in.") }
@@ -784,7 +811,6 @@ actor SessionHost {
     generation += 1
     self.live = nil
     await live.stop()
-    await endTurn()
   }
 
   /// Output with no turn running is a turn the runtime started by itself.
@@ -794,17 +820,33 @@ actor SessionHost {
     runtimeTurn = true
     goalTurn = false
     turnActed = false
+    stopAsked = false
     try? await library.setTurnRunning(sessionID, true)
     setRun(.running)
   }
 
   /// Whatever ends a turn ends its run state, marker and prompts, even when
-  /// a write failed.
+  /// a write failed. Its caller saves what the turn left open first.
   private func endTurn() async {
     clearPrompts()
+    if run == .running { await leaveRun(to: .idle) }
+  }
+
+  /// The one way out of a running turn. When it ended is saved before views
+  /// hear it ended, so a view that watched it and one that opens the chat
+  /// later time it the same, with "stopped" when Stop was asked while it
+  /// ran, and the running flag clears in the same write.
+  private func leaveRun(to state: RunState) async {
     if run == .running {
-      setRun(.idle)
-      try? await library.setTurnRunning(sessionID, false)
+      do {
+        try await finish(.notice(Notice(kind: .turnEnded, text: stopAsked ? "stopped" : "")), id: UUID().uuidString.lowercased(),
+                         endingTurn: true)
+      } catch {
+        try? await library.setTurnRunning(sessionID, false)
+      }
+      setRun(state)
+    } else if run != state {
+      setRun(state)
     }
   }
 
@@ -837,9 +879,8 @@ actor SessionHost {
 
   private func nativeSessionGone() async throws {
     clearPrompts()
-    try? await library.setTurnRunning(sessionID, false)
     try await library.markNativeSessionGone(sessionID)
-    setRun(.nativeSessionGone)
+    await leaveRun(to: .nativeSessionGone)
     try await finish(.notice(Notice(kind: .nativeSessionGone, text: Self.goneError.message)), id: UUID().uuidString.lowercased())
   }
 
@@ -852,6 +893,7 @@ actor SessionHost {
     } catch {
       dropOpenItems()
       await shutDown()
+      await endTurn()
     }
   }
 
@@ -881,6 +923,23 @@ actor SessionHost {
 
   /// A tool call's latest state with the output streamed so far, unless the
   /// call brings output of its own.
+  /// A call in progress as a runtime's update leaves it: it keeps where it
+  /// started, and a thought keeps the last title that says something, so a
+  /// later update titled only "Thinking" does not take it back, for every
+  /// view and in the saved item.
+  static func updated(_ call: ToolCall, from previous: ToolCall) -> ToolCall {
+    var call = call
+    call.start = previous.start
+    func says(_ title: String?) -> Bool {
+      guard let title = title?.trimmingCharacters(in: .whitespacesAndNewlines), !title.isEmpty else { return false }
+      return !["thinking", "thought", "reasoning"].contains(title.lowercased())
+    }
+    if call.kind == .thinking, previous.kind == .thinking, !says(call.title), says(previous.title) {
+      call.title = previous.title
+    }
+    return call
+  }
+
   private func withOutput(_ call: ToolCall, of id: String) -> ToolCall {
     var call = call
     if call.output?.isEmpty ?? true {
@@ -898,12 +957,14 @@ actor SessionHost {
 
   /// Writes a finished item to the library, then announces it. A tool
   /// call's input and output are capped first.
-  private func finish(_ content: ItemContent, id: String, author: ItemAuthor? = nil) async throws {
+  private func finish(_ content: ItemContent, id: String, author: ItemAuthor? = nil, endingTurn: Bool = false) async throws {
     var content = content
     if case .toolCall(let call) = content { content = .toolCall(ToolOutput.capped(call)) }
     overflow[id] = nil
     do {
-      let item = try await library.appendItem(sessionID: sessionID, id: id, content: content, author: author)
+      let item = try await library.appendItem(sessionID: sessionID, id: id, content: content, author: author,
+                                              endingTurn: endingTurn)
+      lastSequence = item.sequence
       inProgress.removeAll { $0.id == id }
       broadcast(.itemFinished(item))
     } catch {

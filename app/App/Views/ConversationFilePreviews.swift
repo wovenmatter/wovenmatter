@@ -3,48 +3,72 @@ import SwiftUI
 import UniformTypeIdentifiers
 import WovenProtocol
 
+/// The files a reply refers to, as chips in its action row after Copy.
 /// Resolve only retained message identities, never read paths directly from agent text.
-struct ConversationFilePreviews: View {
-    let content: String
+@MainActor
+struct ConversationFileRow {
     let messageID: String
     let resolveFile: (String) async throws -> URL
 
-    private var files: [LibraryAsset] {
+    static func files(in content: String) -> [LibraryAsset] {
         LibraryLinkDiscovery.links(in: content).filter { LibraryFileReference.path($0.source) != nil }
     }
 
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            ForEach(files, id: \.source) { file in
-                ConversationFileAttachment(file: file, identity: WorkspaceLibraryItem.identifier(
-                    messageID: messageID, source: file.source), resolve: { try await resolveFile(file.source) })
-            }
+    /// One chip per file, each with its own actions. A link in the reply's
+    /// text to a file opens the first chip for that file's path.
+    func chips(_ files: [LibraryAsset], opening request: ConversationFileOpenRequest? = nil) -> some View {
+        let target = request.flatMap { request in files.first { LibraryFileReference.path($0.source) == request.path }?.source }
+        return ForEach(files, id: \.source) { file in
+            ConversationFileAttachment(file: file, identity: WorkspaceLibraryItem.identifier(
+                messageID: messageID, source: file.source), resolve: { try await resolveFile(file.source) },
+                openRequest: file.source == target ? request : nil)
         }
     }
 }
 
-private struct ConversationFileAttachment: View {
+/// A link in a reply's text asking its file's chip to do what clicking the
+/// chip does. Each click is a new request.
+struct ConversationFileOpenRequest: Equatable {
+    let path: String
+    let id = UUID()
+}
+
+struct ConversationFileAttachment: View {
+    /// A chip never takes more than this; its name truncates in the middle.
+    private static let maximumNameWidth: CGFloat = 240
     @Environment(\.openDocumentPreview) private var openPreview
+    @Environment(\.wovenTheme) private var theme
     let file: LibraryAsset
     let identity: String
     let resolve: () async throws -> URL
+    var openRequest: ConversationFileOpenRequest?
     @State private var url: URL?
     @State private var error: String?
     @State private var loading = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 8) {
-                Button { perform { openPreview?($0, "library:" + identity) } } label: {
+        VStack(alignment: .leading, spacing: ConversationMetrics.tight) {
+            HStack(spacing: ConversationMetrics.hair) {
+                Button { preview() } label: {
                     Label(url?.lastPathComponent ?? file.title,
                           systemImage: file.kind == .photo ? "photo" : "doc.richtext")
-                        .font(.system(size: 12)).lineLimit(1).truncationMode(.middle)
+                        .font(.system(size: 12, weight: .medium)).lineLimit(1).truncationMode(.middle)
+                        .foregroundStyle(WovenPalette.foreground)
+                        .frame(maxWidth: Self.maximumNameWidth, alignment: .leading)
+                        .padding(.leading, ConversationMetrics.labelGap + ConversationMetrics.hair)
+                        // The reply's action row height, so Copy and the chips share one line.
+                        .frame(height: ConversationMetrics.actionRowHeight)
+                        .contentShape(Rectangle())
                 }
-                .buttonStyle(WovenQuietButtonStyle())
+                .buttonStyle(.plain)
                 .help("Preview \(file.title). Drag to copy the file.")
                 .accessibilityLabel("Preview \(file.title)")
                 .onDrag { dragProvider() }
-                Button { perform { await save($0) } } label: { Image(systemName: "arrow.down.to.line") }
+                Button { perform { await save($0) } } label: {
+                    Image(systemName: "arrow.down.to.line")
+                        .frame(width: ConversationMetrics.actionRowHeight, height: ConversationMetrics.actionRowHeight)
+                        .contentShape(Rectangle())
+                }
                     .buttonStyle(WovenIconButtonStyle())
                     .help("Save \(file.title)…")
                     .accessibilityLabel("Save \(file.title)")
@@ -61,9 +85,17 @@ private struct ConversationFileAttachment: View {
                 .accessibilityLabel("File actions for \(file.title)")
                 if loading { ProgressView().controlSize(.small) }
             }
+            .padding(.trailing, ConversationMetrics.hair)
+            .background(theme.palette.themeSoft.opacity(0.5),
+                        in: RoundedRectangle(cornerRadius: WovenMetrics.controlRadius, style: .continuous))
             .disabled(loading)
             if let error { Text(error).font(.caption).foregroundStyle(WovenPalette.mutedForeground) }
         }
+        .onChange(of: openRequest) { _, request in if request != nil { preview() } }
+    }
+
+    private func preview() {
+        perform { openPreview?($0, "library:" + identity) }
     }
 
     // Launch Services can identify the associated app from the filename without

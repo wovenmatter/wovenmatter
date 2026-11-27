@@ -32,9 +32,56 @@ struct OpenCodeProjection: Sendable {
   /// OpenCode's error for a question the person dismissed.
   static let questionDismissal = "The user dismissed this question"
 
-  /// The events `event` makes. It is one of this session's own.
-  mutating func receive(_ event: JSONValue) -> [RuntimeEvent] {
+  /// The assistant messages and tool calls of the execution running, and of
+  /// those that ended. OpenCode's events name their message
+  /// (`assistantMessageID`) and a tool's events their call (`id`); its
+  /// execution events name neither.
+  private var turnMessages: Set<String> = []
+  private var turnCalls: Set<String> = []
+  private var endedMessages = RecentIDs()
+  private var endedCalls = RecentIDs()
+  /// OpenCode said an execution started, and it has not ended.
+  private var executing = false
+
+  /// The most recent ids, oldest out first: a late event follows its
+  /// execution's end closely, so only recent ones are needed.
+  struct RecentIDs: Sendable {
+    private var ids: Set<String> = []
+    private var order: [String] = []
+    private static let limit = 500
+
+    func contains(_ id: String) -> Bool { ids.contains(id) }
+
+    /// The execution just ended keeps all its ids: only older ones go.
+    mutating func insert(contentsOf new: Set<String>) {
+      for id in new where ids.insert(id).inserted { order.append(id) }
+      let keep = max(Self.limit, new.count)
+      if order.count > keep {
+        let gone = order.prefix(order.count - keep)
+        ids.subtract(gone)
+        order.removeFirst(gone.count)
+      }
+    }
+  }
+
+  /// The events `event` makes. It is one of this session's own. `running`
+  /// is whether the session knows of a turn running, one it sent.
+  mutating func receive(_ event: JSONValue, running: Bool = false) -> [RuntimeEvent] {
     let type = event["type"]?.string ?? ""
+    // An event of an execution that ended (a tool closing after an
+    // interrupt) is left out before it changes anything here.
+    let data = event["data"] ?? .null
+    let message = data["assistantMessageID"]?.string ?? ""
+    let call = type.hasPrefix("session.tool.") ? data["id"]?.string ?? "" : ""
+    if endedMessages.contains(message) || endedCalls.contains(call) { return [] }
+    // A result or progress of a call not known here, while no execution is
+    // known to run, is the late end of one whose start the stream missed:
+    // it starts no turn. Text, reasoning and a call's own start do.
+    if type == "session.execution.started" { executing = true }
+    let result = ["session.tool.success", "session.tool.failed", "session.tool.progress"].contains(type)
+    if result, calls[call] == nil, !executing, !running, turnMessages.isEmpty { return [] }
+    if !message.isEmpty { turnMessages.insert(message) }
+    if !call.isEmpty { turnCalls.insert(call) }
     // What starts the step's text or a tool call. A tool's later events are
     // not: a tool running on can report while the next step reasons.
     let ending = type.hasPrefix("session.text.") || type == "session.tool.input.started" || type == "session.tool.called"
@@ -239,6 +286,11 @@ struct OpenCodeProjection: Sendable {
     OpenCodeToolFailures.shared.forget(session: session)
     events.append(.turnFinished(failure: failure, usage: nil))
     stepFailure = nil
+    endedMessages.insert(contentsOf: turnMessages)
+    endedCalls.insert(contentsOf: turnCalls)
+    turnMessages.removeAll()
+    turnCalls.removeAll()
+    executing = false
     return events
   }
 

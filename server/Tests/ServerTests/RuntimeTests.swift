@@ -186,7 +186,7 @@ func acpSessionResumesAfterRestartAndSaysWhenTheRuntimeLostIt() async throws {
   // Resumed with its history, which the replay did not add to the library again.
   #expect(assistantTexts(keptItems).map { $0.split(separator: " ").dropFirst(2).joined(separator: " ") }
           == ["turn 1: one", "turn 2: two"])
-  #expect(keptItems.map(\.sequence) == Array(1...6))
+  #expect(keptItems.map(\.sequence) == Array(1...8))
 
   let refused = await #expect(throws: ProtocolError.self) {
     _ = try await again.call(SendTurn(sessionID: lost.id, text: "two"))
@@ -218,7 +218,7 @@ func serverStoppedMidTurnLeavesOneNotice() async throws {
   defer { second.server.stopLater() }
   let items = try await (try await second.connect()).call(SessionItems(sessionID: session.id))
   let notices = items.compactMap { if case .notice(let notice) = $0.content { notice.kind } else { nil } }
-  #expect(notices == [.interrupted])
+  #expect(notices.filter { $0 != .turnEnded } == [.interrupted])
 }
 
 @Test func onlyTheAddressedMachineCanOpenASealedSecret() throws {

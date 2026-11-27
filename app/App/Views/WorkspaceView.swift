@@ -159,6 +159,13 @@ struct WorkspaceView: View {
         .debugRequest("trash") { showsWorkspaceTrash = true }
         // `chat:ID` opens a chat; `new:RUNTIME` starts one with this Mac's agent, `new:RUNTIME@MACHINE` there.
         .debugCommand("chat:") { selectConversation($0) }
+        // `source:CHAT` opens the oldest loaded Library item of CHAT, as the Library does.
+        .debugCommand("source:") { conversationID in
+            guard let item = model.library.items.last(where: { $0.conversationID == conversationID }) else { return }
+            model.navigation.libraryMessageTarget = item
+            destination = .workspace
+            selectConversation(item.conversationID)
+        }
         .debugCommand("new:", startDebugChat)
         // `bot:ID` opens a bot's chat (`bot:forum` the Forum); `bots-settings` Settings > Bots.
         .debugCommand("bot:") { selectBot(BotTarget(machineID: model.bots.hostMachineID ?? "", botID: $0)) }
@@ -650,8 +657,8 @@ struct WorkspaceView: View {
             HStack {
                 if showLeftRailButton {
                     RevealRailButton(side: .left,
-                        width: presentsAssets ? WovenMetrics.assetToolbarControlWidth : 36,
-                        height: presentsAssets ? WovenMetrics.assetToolbarControlHeight : 36,
+                        width: presentsAssets ? WovenMetrics.assetToolbarControlWidth : WovenMetrics.floatingControlSize,
+                        height: presentsAssets ? WovenMetrics.assetToolbarControlHeight : WovenMetrics.floatingControlSize,
                         action: onLeftRail)
                 }
                 Spacer()
@@ -676,13 +683,17 @@ struct WorkspaceView: View {
                 }
                 if showRightRailButton {
                     RevealRailButton(side: .right,
-                        width: presentsAssets ? WovenMetrics.assetToolbarControlWidth : 36,
-                        height: presentsAssets ? WovenMetrics.assetToolbarControlHeight : 36,
+                        width: presentsAssets ? WovenMetrics.assetToolbarControlWidth : WovenMetrics.floatingControlSize,
+                        height: presentsAssets ? WovenMetrics.assetToolbarControlHeight : WovenMetrics.floatingControlSize,
                         action: onRightRail)
                 }
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, presentsAssets ? WovenMetrics.assetToolbarVerticalPadding : 12)
+            .padding(.leading, WovenMetrics.floatingControlInset)
+            // The rightmost button is centred in the chat's right margin, over
+            // the panel button beside the composer.
+            .padding(.trailing, presentsAssets ? WovenMetrics.floatingControlInset
+                : (ConversationMetrics.sideInset - (showRightRailButton ? WovenMetrics.floatingControlSize : 32)) / 2)
+            .padding(.vertical, presentsAssets ? WovenMetrics.assetToolbarVerticalPadding : WovenMetrics.floatingControlInset)
 
             if let notice {
                 Text(notice)
@@ -1453,7 +1464,6 @@ struct WorkspaceSurface: View {
                 headerInsets: botHeaderInsets(for: panelID),
                 focusGeneration: chatPanels.focusRequest?.panelID == panelID ? chatPanels.focusRequest?.generation : nil,
                 startsComposerCollapsed: panelID != .primary,
-                usesCompactSpacing: chatPanels.hasAuxiliaryPanels,
                 showsClosePanel: chatPanels.canClosePanel(panelID),
                 showsAddPanel: chatPanels.canAddPanel(from: panelID),
                 onActivate: { onActivatePanel(panelID) },
@@ -1516,12 +1526,12 @@ struct WorkspaceSurface: View {
                     submittingConversationIDs.contains($0.id)
                 } ?? false,
                 startsComposerCollapsed: panelID != .primary,
-                usesCompactPanelSpacing: chatPanels.hasAuxiliaryPanels,
                 showsClosePanel: chatPanels.canClosePanel(panelID),
                 showsAddPanel: chatPanels.canAddPanel(from: panelID),
                 focusRequestGeneration: chatPanels.focusRequest?.panelID == panelID
                     ? chatPanels.focusRequest?.generation
                     : nil,
+                isActivePanel: chatPanels.activePanelID == panelID,
                 onActivatePanel: { onActivatePanel(panelID) },
                 onClosePanel: { onClosePanel(panelID) },
                 onAddPanel: { onAddPanel(panelID) },

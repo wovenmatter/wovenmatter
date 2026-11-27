@@ -58,6 +58,15 @@ final class SessionStore {
     private var run: RunState = .idle
     @ObservationIgnored private var items: [SessionItem] = []
     @ObservationIgnored private var inProgress: [LiveItem] = []
+    /// When this view first saw each turn the runtime started by itself,
+    /// while its first item was in progress.
+    @ObservationIgnored private var runStarts: [String: Date] = [:]
+    /// The session's runtime: from the owner's snapshot, else the workspace's
+    /// record of the chat while only saved items show.
+    @ObservationIgnored private var runtime: RuntimeKind?
+    private var runsClaudeCode: Bool {
+        (runtime ?? workspace?.conversation(id: sessionID)?.runtime) == .claudeCode
+    }
     /// Where the drawn part of each streaming reply or thinking trace ends, in UTF-8 bytes.
     @ObservationIgnored private var readyEnds: [String: Int] = [:]
     /// Each text item in progress: the reply that shows it, and that reply's text before it.
@@ -420,6 +429,7 @@ final class SessionStore {
         inProgress = snapshot.inProgress
         readyEnds = [:]
         prompts = snapshot.prompts
+        runtime = snapshot.session.runtime
         run = snapshot.run
         applyGoal(snapshot.session.goal)
         apply(snapshot.configuration)
@@ -501,7 +511,7 @@ final class SessionStore {
             guard grew || drawn?.isEmpty != false else { return true }
             runActivities[shown] = WorkspaceRunActivityRecord(
                 id: record.id, runID: record.runID, conversationID: record.conversationID,
-                activity: Self.activity(call, id: itemID, live: true, position: record.activity.position ?? 0),
+                activity: Self.activity(call, id: itemID, live: true, position: record.activity.position ?? 0, claudeCode: runsClaudeCode),
                 createdAt: record.createdAt, sequence: record.sequence)
             return true
         default:
@@ -519,14 +529,25 @@ final class SessionStore {
         return end > drawn
     }
 
-    private static func activity(_ call: ToolCall, id: String, live: Bool, position: Int) -> AgentRunActivity {
+    private static func activity(_ call: ToolCall, id: String, live: Bool, position: Int, claudeCode: Bool) -> AgentRunActivity {
         let script = call.kind == .code
         let calls = script ? codeCalls(call.calls ?? [], live: live) : nil
         let questions = call.kind == .question
             ? (call.questions ?? []).enumerated().map { AgentRunQuestion(id: $0, title: $1.title, text: $1.text, answer: $1.answer) }
             : nil
+        // In Claude Code's sessions, a call its adapter reports as thinking
+        // but that gives a subagent a task (its Task tool) is a delegation,
+        // not a thought: a call of ACP's kind `think` from its first report,
+        // whose input streams in as `{}`, then `{description}`, then the
+        // rest, the prompt last; and any call with a prompt and a
+        // description. Another runtime's tool of that name is its own.
+        let input = (try? JSONSerialization.jsonObject(with: Data(call.input.utf8))) as? [String: Any]
+        let delegation = claudeCode
+            && (call.name == "think" && (input?.isEmpty ?? call.input.isEmpty || input?["description"] is String)
+                || input?["prompt"] is String && input?["description"] is String)
+        let thought = call.kind == .thinking && !delegation
         return AgentRunActivity(
-            id: id, kind: call.kind == .thinking ? .thought : call.kind == .plan ? .plan : .tool,
+            id: id, kind: thought ? .thought : call.kind == .plan ? .plan : .tool,
             title: script ? (live ? "Running code" : call.failed ? "Code failed" : "Ran code")
                 : questions.map { questionTitle($0, live: live, failed: call.failed) } ?? call.title ?? call.name,
             // The tools it called, each once; or what the questions were about.
@@ -540,11 +561,11 @@ final class SessionStore {
                 return names.isEmpty ? nil : names.joined(separator: ", ")
             },
             status: live ? "running" : call.failed ? "failed" : "completed",
-            toolName: call.name, content: call.kind == .thinking ? call.output : nil, position: position,
+            toolName: call.name, content: thought ? call.output : nil, position: position,
             planEntries: (call.plan ?? []).map { AgentRunPlanEntry(content: $0.text, status: $0.status.rawValue) },
             rawInputJSON: call.input, rawOutputJSON: call.output,
             subagents: call.kind == .task ? [child(call, id: id, live: live)] : nil,
-            codeCalls: calls, questions: questions)
+            codeCalls: calls, questions: questions, delegates: delegation ? true : nil)
     }
 
     /// "Asking 2 questions" while they wait, then "Asked 2 questions"; or,
@@ -558,13 +579,16 @@ final class SessionStore {
     }
 
     /// A script's tool calls as its card lists them. One without output that
-    /// has not failed is running while the script runs, and done after.
+    /// has not failed is running while the script runs, and done after. A
+    /// visual reply it published is left out: the reply shows as its own
+    /// item, while the script keeps its source, output and other calls.
     private static func codeCalls(_ calls: [ToolCall], live: Bool) -> [AgentRunCodeCall] {
-        calls.enumerated().map { index, call in
+        calls.enumerated().compactMap { index, call -> AgentRunCodeCall? in
             // The entry that says how many more calls there were has no name.
             guard !call.name.isEmpty else { return AgentRunCodeCall(id: index, name: call.title ?? "", status: nil) }
             let status: AgentRunCodeCall.Status = call.failed ? .failed : live && call.output == nil ? .running
                 : call.kind == .visualReply ? .shownInChat : .completed
+            if status == .shownInChat { return nil }
             return AgentRunCodeCall(id: index, name: readableToolName(call.name), status: status,
                                     error: call.failed ? call.output : nil)
         }
@@ -610,28 +634,57 @@ final class SessionStore {
         var liveReplies: [String: (messageID: String, before: String)] = [:]
         var runs: [WorkspaceRunRecord] = []
         var activities: [WorkspaceRunActivityRecord] = []
-        let entries = items.sorted { $0.sequence < $1.sequence }.map {
-            (id: $0.id, date: $0.createdAt, content: $0.content, live: false, author: $0.author)
-        } + inProgress.map { (id: $0.id, date: Date(), content: $0.content, live: true, author: ItemAuthor?.none) }
+        func start(_ content: ItemContent) -> ToolCallStart? { if case .toolCall(let call) = content { call.start } else { nil } }
+        let entries = sessionItemOrder(
+            items.sorted { $0.sequence < $1.sequence }.map {
+                (start: start($0.content), sequence: $0.sequence,
+                 value: (id: $0.id, date: $0.createdAt, content: $0.content, live: false, author: $0.author))
+            } + inProgress.map {
+                (start: start($0.content), sequence: Int?.none,
+                 value: (id: $0.id, date: Date(), content: $0.content, live: true, author: ItemAuthor?.none))
+            })
         var goneNotice: String?
+        /// The runs holding an item in progress.
+        var liveRuns: Set<Int> = []
+
+        /// A run ends when the last of its items finished, whatever order
+        /// they show in; one with an item in progress is still running.
+        func extend(_ run: Int, to date: Date, live: Bool) {
+            if live { liveRuns.insert(run) } else { runs[run].completedAt = max(runs[run].completedAt ?? date, date) }
+        }
 
         /// A turn that ended without a reply (it failed, or the person
         /// stopped it) still shows its work and how it ended, under an
         /// empty reply as a visual reply's turn does.
         func closeRun() {
             guard let last = runs.indices.last, runs[last].assistantMessageID == nil,
-                  runs[last].status == .failed || activities.last?.runID == runs[last].id else { return }
+                  runs[last].status == .failed || runs[last].status == .cancelled
+                    || activities.last?.runID == runs[last].id else { return }
             let id = Self.replyID(runs[last].id)
             messages.append(WorkspaceMessageRecord(id: id, conversationID: sessionID, role: .assistant, content: "",
                                                    status: .complete, createdAt: runs[last].completedAt ?? runs[last].startedAt ?? Date()))
             runs[last].assistantMessageID = id
         }
 
-        func currentRun(at date: Date) -> Int {
-            if runs.isEmpty {
+        /// A turn's end closed the last run: what follows it before another
+        /// message is a turn the runtime started by itself.
+        var ended = false
+        func currentRun(at date: Date, id: String, live: Bool) -> Int {
+            if ended {
+                // It is its own run, named and timed by its own first item:
+                // from when this view first saw it, while that item was in
+                // progress, so finishing it does not move the start.
+                let runID = "run-\(id)"
+                if live, runStarts[runID] == nil { runStarts[runID] = date }
+                let start = runStarts[runID] ?? date
+                closeRun()
+                runs.append(WorkspaceRunRecord(id: runID, conversationID: sessionID, status: .completed,
+                                               startedAt: start, completedAt: start))
+            } else if runs.isEmpty {
                 runs.append(WorkspaceRunRecord(id: "run-start-\(sessionID)", conversationID: sessionID, status: .completed,
                                                startedAt: date, completedAt: date))
             }
+            ended = false
             return runs.count - 1
         }
 
@@ -645,6 +698,7 @@ final class SessionStore {
                 default: nil
                 }
                 closeRun()
+                ended = false
                 messages.append(WorkspaceMessageRecord(
                     id: entry.id, conversationID: sessionID, role: .user, content: text, status: .complete, createdAt: entry.date,
                     attachments: attachments.map {
@@ -654,7 +708,7 @@ final class SessionStore {
                 runs.append(WorkspaceRunRecord(id: "run-\(entry.id)", conversationID: sessionID, status: .completed,
                                                userMessageID: entry.id, startedAt: entry.date, completedAt: entry.date))
             case .assistantMessage(let text):
-                let run = currentRun(at: entry.date)
+                let run = currentRun(at: entry.date, id: entry.id, live: entry.live)
                 let id = Self.replyID(runs[run].id)
                 let shown: Int
                 if let index = messages.lastIndex(where: { $0.id == id }) {
@@ -676,19 +730,19 @@ final class SessionStore {
                         createdAt: Self.timestamps.string(from: entry.date), sequence: Int64(position)))
                 }
                 runs[run].assistantMessageID = id
-                if !entry.live { runs[run].completedAt = entry.date }
+                extend(run, to: entry.date, live: entry.live)
             case .toolCall(let call):
-                let run = currentRun(at: entry.date)
-                if !entry.live { runs[run].completedAt = entry.date }
+                let run = currentRun(at: entry.date, id: entry.id, live: entry.live)
+                extend(run, to: entry.date, live: entry.live)
                 // A published visual reply shows as its own item; only a call that failed shows as a call.
                 if call.kind == .visualReply && !call.failed { continue }
                 activities.append(WorkspaceRunActivityRecord(
                     id: entry.id, runID: runs[run].id, conversationID: sessionID,
-                    activity: Self.activity(call, id: entry.id, live: entry.live, position: position),
+                    activity: Self.activity(call, id: entry.id, live: entry.live, position: position, claudeCode: runsClaudeCode),
                     createdAt: Self.timestamps.string(from: entry.date), sequence: Int64(position)))
             case .visualReply(let reply):
-                let run = currentRun(at: entry.date)
-                runs[run].completedAt = entry.date
+                let run = currentRun(at: entry.date, id: entry.id, live: entry.live)
+                extend(run, to: entry.date, live: entry.live)
                 // A visual reply is a reply even before any words, so its run is drawn.
                 if runs[run].assistantMessageID == nil {
                     let id = Self.replyID(runs[run].id)
@@ -700,14 +754,26 @@ final class SessionStore {
                     id: entry.id, runID: runs[run].id, conversationID: sessionID,
                     activity: AgentRunActivity(
                         id: entry.id, kind: .activity, title: reply.title, status: "completed", position: position,
-                        htmlRender: ConversationHTMLRenderReference(id: entry.id, title: reply.title, height: reply.height,
-                                                                    digest: reply.digest)),
+                        htmlRender: ConversationHTMLRenderReference(id: entry.id, title: reply.title, height: reply.height, width: reply.width,
+                                                                    digest: reply.digest, opensWithTitle: reply.opensWithTitle)),
                     createdAt: Self.timestamps.string(from: entry.date), sequence: Int64(position)))
             case .notice(let notice):
                 if notice.kind == .nativeSessionGone { goneNotice = entry.id }
+                // When the turn ended, as its server saved it: it times the
+                // turn in every view, and draws nothing.
+                if notice.kind == .turnEnded {
+                    if let last = runs.indices.last {
+                        extend(last, to: entry.date, live: false)
+                        // A stopped turn says so, unless it failed.
+                        if notice.text == "stopped", runs[last].status != .failed { runs[last].status = .cancelled }
+                    }
+                    // Even as the first item loaded, what follows is its own run.
+                    ended = true
+                    continue
+                }
                 // A turn that failed or was stopped ended with that notice.
                 if notice.kind == .failure || notice.kind == .interrupted, !runs.isEmpty {
-                    runs[runs.count - 1].completedAt = entry.date
+                    extend(runs.count - 1, to: entry.date, live: false)
                 }
                 if notice.kind == .failure, !runs.isEmpty {
                     runs[runs.count - 1].status = .failed
@@ -722,8 +788,13 @@ final class SessionStore {
         }
         if run != .running { closeRun() }
         if run == .running, let last = runs.indices.last {
-            runs[last].status = .running
-            runs[last].completedAt = nil
+            // The newest run runs, and so does an earlier one whose item is
+            // still in progress (a message sent while a tool works), until
+            // that item finishes.
+            for index in liveRuns.union([last]) {
+                runs[index].status = .running
+                runs[index].completedAt = nil
+            }
             // Work before the first words of the reply shows under a reply that is still arriving.
             if runs[last].assistantMessageID == nil || messages.last?.role == .user {
                 let id = Self.replyID(runs[last].id)
@@ -744,4 +815,31 @@ final class SessionStore {
         if progress != taskProgress { taskProgress = progress }
         interactions = prompts.map(interaction)
     }
+}
+
+/// A session's items in the order they started. Items are numbered in the
+/// order they finish, so a call that ran while others finished (a tool a
+/// reply was written beside, a script whose visual reply was saved first)
+/// would otherwise show after them. A call the server saw start says where
+/// (`ToolCallStart`): right after the item it followed, among the calls
+/// that followed that item in the order they started. Every other item
+/// keeps its sequence, so items without a start never change order among
+/// themselves, and a session with none shows as it was saved. An item in
+/// progress without a start (a reply being written) comes last. One sort of
+/// the placed calls and one merge: no clock and no repeated passes.
+func sessionItemOrder<Value>(_ items: [(start: ToolCallStart?, sequence: Int?, value: Value)]) -> [Value] {
+    let placed = items.compactMap { item in item.start.map { (start: $0, value: item.value) } }
+        .sorted { ($0.start.after, $0.start.order) < ($1.start.after, $1.start.order) }
+    var ordered: [Value] = []
+    var next = placed.startIndex
+    for item in items where item.start == nil {
+        guard let sequence = item.sequence else { continue }
+        while next < placed.endIndex, placed[next].start.after < sequence {
+            ordered.append(placed[next].value)
+            next += 1
+        }
+        ordered.append(item.value)
+    }
+    ordered += placed[next...].map(\.value)
+    return ordered + items.filter { $0.start == nil && $0.sequence == nil }.map(\.value)
 }

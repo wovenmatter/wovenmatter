@@ -41,8 +41,9 @@ final class ConversationTranscriptState {
         }
     }
 
-    func workScrollSnapshot(_ key: String) -> ConversationWorkScrollSnapshot {
-        workScrollSnapshots[key] ?? .init()
+    /// The reader's saved position in a bounded list, if there is one.
+    func workScrollSnapshot(_ key: String) -> ConversationWorkScrollSnapshot? {
+        workScrollSnapshots[key]
     }
 
     func setWorkScrollSnapshot(_ key: String, _ snapshot: ConversationWorkScrollSnapshot) {
