@@ -442,7 +442,7 @@ struct CloudConversation: View {
         if let conversation, let notice = model.macAccessNotice(for: conversation) {
             MacAccessNotice(message: notice, openSettings: { model.navigation.pendingConnectionsScope = "permissions" })
         }
-        if let conversation, !conversation.isArchived, session?.isOwnerReachable == false {
+        if let conversation, !conversation.isArchived, session?.isOwnerDisconnected == true {
             // Its saved history shows; controls return when its owner reconnects.
             MacAccessNotice(message: "\(model.machines.machine(id: conversation.machineID)?.name ?? "Its machine") is not connected. Woven Matter reconnects automatically.",
                 openSettings: nil)

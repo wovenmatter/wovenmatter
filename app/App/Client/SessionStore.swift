@@ -21,6 +21,11 @@ final class SessionStore {
 
     /// False while the owning machine cannot be reached: its saved items show and sending is disabled.
     var isOwnerReachable: Bool { isFollowing && owner?.isConnected == true }
+    /// The owning machine's server is not connected, once the chat shows
+    /// anything. Unlike `isOwnerReachable`, a live view still on its way from
+    /// a connected owner does not count, so a chat being opened never reads
+    /// as offline.
+    var isOwnerDisconnected: Bool { hasLoaded && owner?.isConnected != true }
     /// A turn is running on the owner.
     var isRunning: Bool { run == .running }
     /// The runtime no longer has this chat's native session: it can only be read.
