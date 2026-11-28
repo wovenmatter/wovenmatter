@@ -20,6 +20,8 @@ import WovenProtocol
 /// that takes mid-turn input at the end of a tool round would.
 /// `code woven NAME {arguments}` makes that call from a script, as a
 /// harness's code mode does: one `.code` call that holds it.
+/// With an opening gate, each open waits until it is opened, as a runtime
+/// whose process is slow to start does.
 public final class StandInRuntime: Runtime {
   public static let kind = RuntimeKind(rawValue: "standIn")
   public var kind: RuntimeKind { Self.kind }
@@ -28,13 +30,18 @@ public final class StandInRuntime: Runtime {
   /// real runtime's session files do.
   public final class NativeStore: Sendable {
     private let sessions = Mutex<[String: Int]>([:])
-    private let counts = Mutex<(started: Int, resumed: Int)>((0, 0))
+    private let counts = Mutex<(started: Int, resumed: Int, running: Int)>((0, 0, 0))
 
     public init() {}
 
     /// Native sessions started fresh, and resumed.
     public var started: Int { counts.withLock { $0.started } }
     public var resumed: Int { counts.withLock { $0.resumed } }
+    /// Sessions open now: opened and not stopped, as processes would be.
+    public var running: Int { counts.withLock { $0.running } }
+
+    func opened() { counts.withLock { $0.running += 1 } }
+    func stopped() { counts.withLock { $0.running -= 1 } }
 
     /// Loses a native session, as a runtime does when its files are removed.
     public func forget(_ handle: String) { _ = sessions.withLock { $0.removeValue(forKey: handle) } }
@@ -79,14 +86,19 @@ public final class StandInRuntime: Runtime {
       if isOpen { return }
       await withCheckedContinuation { waiters.append($0) }
     }
+
+    /// How many wait for it now.
+    public var waiting: Int { waiters.count }
   }
 
   public let store: NativeStore
   public let gate: Gate?
+  public let opening: Gate?
 
-  public init(store: NativeStore = NativeStore(), gate: Gate? = nil) {
+  public init(store: NativeStore = NativeStore(), gate: Gate? = nil, opening: Gate? = nil) {
     self.store = store
     self.gate = gate
+    self.opening = opening
   }
 
   public func status() async -> RuntimeStatus {
@@ -94,6 +106,7 @@ public final class StandInRuntime: Runtime {
   }
 
   public func open(_ start: RuntimeStart) async throws -> any RuntimeSession {
+    await opening?.wait()
     if let handle = start.nativeHandle {
       guard store.resume(handle) else { throw RuntimeError.nativeSessionGone }
       return StandInSession(handle: handle, store: store, gate: gate, tools: start.tools)
@@ -116,6 +129,7 @@ private final class StandInSession: RuntimeSession {
   /// The question an "Ask me:" turn waits on, by prompt id.
   private let asked = Mutex<String?>(nil)
   private let tools: ToolAccess?
+  private let running = Mutex(true)
 
   init(handle: String, store: StandInRuntime.NativeStore, gate: StandInRuntime.Gate?, tools: ToolAccess?) {
     self.tools = tools
@@ -123,6 +137,7 @@ private final class StandInSession: RuntimeSession {
     (events, emit) = AsyncStream<RuntimeEvent>.makeStream()
     self.store = store
     self.gate = gate
+    store.opened()
   }
 
   var configuration: SessionConfiguration {
@@ -275,6 +290,7 @@ private final class StandInSession: RuntimeSession {
 
   func stop() async {
     turn.withLock { $0?.cancel() }
+    if running.withLock({ running in defer { running = false }; return running }) { store.stopped() }
     emit.yield(.exited)
     emit.finish()
   }

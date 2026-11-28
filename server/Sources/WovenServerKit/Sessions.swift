@@ -148,8 +148,10 @@ actor SessionManager {
   }
 
   /// Creates a session on this machine, in `directory`, its folder's
-  /// directory or a scratch directory of its own, and opens its runtime so
-  /// the composer has the runtime's options.
+  /// directory or a scratch directory of its own, and replies once it and
+  /// its default choices are saved. Its runtime starts meanwhile, so it is
+  /// ready when the person sends; until then the chat shows the saved
+  /// choices and the options the runtime last reported on this machine.
   func create(runtime kind: RuntimeKind, title: String, folderID: String?, directory chosen: String? = nil) async throws -> Session {
     guard runtimes[kind] != nil else { throw ProtocolError(.badRequest, "This machine has no \(kind.rawValue) runtime.") }
     let id = UUID().uuidString.lowercased()
@@ -178,8 +180,11 @@ actor SessionManager {
       try? await library.setSessionChoices(id, model: defaults["model"]?.string, thinking: defaults["thinking"]?.string,
                                            permission: defaults["permission"]?.string)
     }
-    // A runtime that cannot start yet still leaves a session to send to later.
-    _ = try? await host(for: id).configure(SessionChoices())
+    // Started without waiting for it: the session's lane is free while its
+    // runtime opens, and whatever needs the runtime meanwhile waits for this
+    // same opening. A runtime that cannot start yet still leaves a session
+    // to send to later.
+    if let host = try? await host(for: id) { Task { _ = try? await host.configure(SessionChoices()) } }
     return try await library.session(id) ?? session
   }
 
@@ -247,6 +252,13 @@ actor SessionHost {
   private let configurations: RuntimeConfigurations
   private let tools: ToolAccess?
   private var live: (any RuntimeSession)?
+  /// The runtime while it opens, which everyone who needs it meanwhile
+  /// waits for, so it opens once (`openLive`).
+  private var opening: Opening?
+  private var openings = 0
+  /// Its manager has let it go (`stop`, `end`), so its runtime never starts
+  /// again: nothing would stop it.
+  private var closed = false
   private var generation = 0
   private var run: RunState
   private var inProgress: [LiveItem] = []
@@ -333,7 +345,8 @@ actor SessionHost {
   /// The configuration every view shows: the runtime's, with the person's
   /// pending choices over it. While the runtime is not running, the saved
   /// choices and the options it last reported on this machine stand in, so
-  /// the choices can be changed before it starts.
+  /// the choices can be changed before it starts. While it opens for the
+  /// first time on this machine there are none yet, and views are told so.
   private var shown: SessionConfiguration {
     var shown = configuration
     if live == nil {
@@ -347,6 +360,8 @@ actor SessionHost {
         }
         if shown.permissionModes.isEmpty { shown.permissionModes = known.permissionModes }
         if shown.commands.isEmpty { shown.commands = known.commands }
+      } else if opening != nil {
+        shown.awaitingOptions = true
       }
     }
     shown.model = pending.model ?? shown.model
@@ -369,10 +384,22 @@ actor SessionHost {
     await enter()
     defer { leave() }
     let continuesGoal = author?.source == .goal
-    // A stop that came after the goal's next turn was queued holds.
-    if continuesGoal && interrupted { return }
-    guard run != .nativeSessionGone else { throw Self.goneError }
-    guard run == .idle || steers else { throw ProtocolError(.busy, "A turn is already running.") }
+    // Whether the message goes now.
+    func goes() throws -> Bool {
+      // A stop that came after the goal's next turn was queued holds.
+      if continuesGoal && interrupted { return false }
+      guard run != .nativeSessionGone else { throw Self.goneError }
+      guard run == .idle || steers else { throw ProtocolError(.busy, "A turn is already running.") }
+      return true
+    }
+    guard try goes() else { return }
+    // A runtime that is not running can take seconds to open. The lane is
+    // free meanwhile (`openLive`), so what was decided is decided again: a
+    // turn the runtime started by itself as it opened is steered, say.
+    if live == nil, run == .idle {
+      _ = try await openLive(lettingGo: true)
+      guard try goes() else { return }
+    }
     var files: [TurnAttachment] = []
     for attachment in attachments {
       guard let file = try await library.contentFile(attachment.digest) else {
@@ -501,13 +528,15 @@ actor SessionHost {
 
   /// Changes the session's choices, starting or resuming its runtime first,
   /// and replies with what is in effect, or with the runtime's refusal.
-  /// During a turn the lane is free while the runtime answers, as for a
-  /// steer: the turn's output, Stop and messages go on meanwhile.
+  /// The lane is free while the runtime opens (`openLive`), and during a
+  /// turn while the runtime answers, as for a steer: the turn's output,
+  /// Stop and messages go on meanwhile. With no choices it only starts the
+  /// runtime, as for a new session.
   func configure(_ choices: SessionChoices) async throws -> SessionConfiguration {
     await enter()
     defer { leave() }
     guard run != .nativeSessionGone else { throw Self.goneError }
-    let live = try await openLive()
+    let live = try await openLive(lettingGo: true)
     guard !choices.isEmpty else {
       await saveChoices()
       return shown
@@ -610,6 +639,8 @@ actor SessionHost {
   func stop() async {
     await enter()
     defer { leave() }
+    closed = true
+    await abandonOpening()
     let wasRunning = run == .running
     await shutDown()
     try? await finishOpenItems()
@@ -624,6 +655,8 @@ actor SessionHost {
   func end() async {
     await enter()
     defer { leave() }
+    closed = true
+    await abandonOpening()
     await shutDown()
     dropOpenItems()
     await endTurn()
@@ -758,11 +791,51 @@ actor SessionHost {
   private static let goneError = ProtocolError(
     .nativeSessionGone, "The runtime no longer has this chat's session. Start a new session to continue.")
 
+  private static let closedError = ProtocolError(.failed, "This session's runtime was stopped. Try again.")
+
+  /// The runtime while it opens: what it resumes, and the open itself.
+  private struct Opening {
+    let number: Int
+    let handle: String?
+    let task: Task<any RuntimeSession, any Error>
+  }
+
   /// The live native session, opening or resuming it when needed. When the
   /// runtime has lost it, the chat says so; a fresh one is never started
   /// under a chat that has had a turn.
-  private func openLive() async throws -> any RuntimeSession {
-    if let live { return live }
+  ///
+  /// Only `runtime.open` runs outside the lane, in an opening shared by
+  /// everyone who needs the runtime while it opens, so it opens once. Its
+  /// result is taken in under the lane (`settle`), and the runtime's events
+  /// are handled only from then on, so nothing is saved or announced
+  /// between a subscriber's snapshot and its events.
+  /// With `lettingGo` the caller lets go of the lane while it waits, which
+  /// can be seconds, so the chat can be opened meanwhile; the caller then
+  /// decides again what it decided before. Without it the lane stays held,
+  /// for a caller in the middle of something that must follow the open.
+  private func openLive(lettingGo: Bool = false) async throws -> any RuntimeSession {
+    while true {
+      if let live { return live }
+      let opening = try await currentOpening()
+      let result: Result<any RuntimeSession, any Error>
+      if lettingGo {
+        leave()
+        result = await opening.task.result
+        await enter()
+      } else {
+        result = await opening.task.result
+      }
+      if let opened = try await settle(opening, result) { return opened }
+      // Another caller back first took a failed open and said why; this one
+      // opens it again, as a caller after a failed open always has.
+    }
+  }
+
+  /// The opening under way, or a new one. Under the lane, so two never start
+  /// together. Its task touches nothing of the host.
+  private func currentOpening() async throws -> Opening {
+    if let opening { return opening }
+    guard !closed else { throw Self.closedError }
     guard let session = try await library.session(sessionID) else { throw ProtocolError(.notFound, "No session \(sessionID).") }
     let native = try await library.nativeSession(for: sessionID)
     lastSequence = try await library.items(sessionID: sessionID, beforeSequence: .max, limit: 1).last?.sequence ?? 0
@@ -771,24 +844,64 @@ actor SessionHost {
     guard !directory.isEmpty else { throw ProtocolError(.failed, "This session has no directory to work in.") }
     try? FileManager.default.createDirectory(atPath: directory, withIntermediateDirectories: true)
     let choices = SessionChoices(model: session.model, thinking: session.thinking, permission: session.permission)
+    let start = RuntimeStart(sessionID: sessionID, directory: directory, nativeHandle: native?.handle, choices: choices,
+                             tools: tools)
+    let runtime = runtime, library = library, sessionID = sessionID
+    openings += 1
+    let opening = Opening(number: openings, handle: native?.handle, task: Task {
+      do {
+        return try await runtime.open(start)
+      } catch RuntimeError.nativeSessionGone {
+        // Nothing was ever said in this chat, so a new native session loses nothing.
+        guard try await library.hasItems(sessionID) == false else { throw RuntimeError.nativeSessionGone }
+        var fresh = start
+        fresh.nativeHandle = nil
+        return try await runtime.open(fresh)
+      }
+    })
+    self.opening = opening
+    // Views that know no options yet hear that they are coming (`shown`).
+    if configurations.configuration(runtime.kind) == nil { broadcast(.configuration(shown)) }
+    return opening
+  }
+
+  /// Takes in what an opening opened, under the lane. The first caller back
+  /// takes it: it becomes the live session, or its failure is said as it
+  /// always was. A caller back later finds it taken: it gets the live
+  /// session, or nil to open again after a failure. After a stop or
+  /// deletion (`abandonOpening`) it is refused.
+  private func settle(_ opening: Opening, _ result: Result<any RuntimeSession, any Error>) async throws
+    -> (any RuntimeSession)? {
+    guard self.opening?.number == opening.number else {
+      if let live { return live }
+      if closed { throw Self.closedError }
+      if run == .nativeSessionGone { throw Self.goneError }
+      return nil
+    }
+    self.opening = nil
     let opened: any RuntimeSession
-    do {
-      opened = try await runtime.open(RuntimeStart(sessionID: sessionID, directory: directory, nativeHandle: native?.handle,
-                                                   choices: choices, tools: tools))
-    } catch RuntimeError.nativeSessionGone {
-      // Nothing was ever said in this chat, so a new native session loses nothing.
-      if try await library.hasItems(sessionID) == false {
-        opened = try await runtime.open(RuntimeStart(sessionID: sessionID, directory: directory, nativeHandle: nil, choices: choices,
-                                                     tools: tools))
-      } else {
+    switch result {
+    case .success(let session):
+      opened = session
+    case .failure(let error):
+      broadcast(.configuration(shown))
+      if let error = error as? RuntimeError, case .nativeSessionGone = error {
         try await nativeSessionGone()
         throw Self.goneError
       }
-    } catch {
       throw ProtocolError(.failed, "\(runtime.kind.rawValue) could not start: \(error)")
     }
-    if native?.handle != opened.nativeHandle {
-      try await library.setNativeSession(sessionID, runtime: runtime.kind, handle: opened.nativeHandle)
+    // A session deleted while its runtime opened is not written to; the
+    // deletion ends this host once it reaches it.
+    do {
+      guard try await library.session(sessionID) != nil else { throw ProtocolError(.notFound, "No session \(sessionID).") }
+      if opening.handle != opened.nativeHandle {
+        try await library.setNativeSession(sessionID, runtime: runtime.kind, handle: opened.nativeHandle)
+      }
+    } catch {
+      await opened.stop()
+      broadcast(.configuration(shown))
+      throw error
     }
     generation += 1
     let current = generation
@@ -803,6 +916,17 @@ actor SessionHost {
       for await event in opened.events { await self?.handle(event, generation: current) }
     }
     return opened
+  }
+
+  /// A stop or deletion that comes while the runtime opens waits for it,
+  /// then stops it, so no runtime process outlives its host and nothing is
+  /// written for it; whoever else waits for that opening is refused. The
+  /// lane stays held meanwhile, as it was while an open held it.
+  private func abandonOpening() async {
+    guard let opening else { return }
+    self.opening = nil
+    if case .success(let opened) = await opening.task.result { await opened.stop() }
+    broadcast(.configuration(shown))
   }
 
   private func shutDown() async {

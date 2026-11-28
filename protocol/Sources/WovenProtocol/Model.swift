@@ -781,10 +781,13 @@ public struct SessionConfiguration: Codable, Sendable, Hashable {
   /// The session's goal, so a goal set or cleared from any UI reaches every
   /// open view at once.
   public var goal: String?
+  /// True while the runtime opens for the first time on its machine, which
+  /// knows none of its options yet: the next configuration brings them.
+  public var awaitingOptions: Bool?
 
   public init(model: String? = nil, thinking: String? = nil, permission: String? = nil, models: [SessionOption] = [],
               thinkingLevels: [SessionOption] = [], permissionModes: [SessionOption] = [], commands: [SessionCommand] = [],
-              goal: String? = nil) {
+              goal: String? = nil, awaitingOptions: Bool? = nil) {
     self.model = model
     self.thinking = thinking
     self.permission = permission
@@ -793,6 +796,7 @@ public struct SessionConfiguration: Codable, Sendable, Hashable {
     self.permissionModes = permissionModes
     self.commands = commands
     self.goal = goal
+    self.awaitingOptions = awaitingOptions
   }
 }
 
