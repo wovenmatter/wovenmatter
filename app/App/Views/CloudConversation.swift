@@ -74,6 +74,9 @@ struct CloudConversation: View {
     @State private var attachmentOpenError: String?
     @State private var choosingFolder = false
     @State private var folderSelectionError: String?
+    /// What the rows and the transcript's views ask this chat to do; one
+    /// object for the view's life, its actions set again on every pass.
+    @State private var rowActions = ConversationRowActions()
 
     /// The open chat's live state; nil before a chat is chosen.
     private var session: SessionStore? {
@@ -93,6 +96,7 @@ struct CloudConversation: View {
     }
 
     @ViewBuilder var body: some View {
+        let actions = refreshedRowActions()
         let runsByAssistantMessageID = self.runsByAssistantMessageID
         let activitiesByRunID = self.activitiesByRunID
         let visibleMessages = self.visibleMessages(runs: runsByAssistantMessageID)
@@ -152,7 +156,7 @@ struct CloudConversation: View {
                             }
                             ForEach(rows) { row in
                                 VStack(spacing: 0) {
-                                    messageRow(row, runs: runsByAssistantMessageID, activities: activitiesByRunID)
+                                    messageRow(row, runs: runsByAssistantMessageID, activities: activitiesByRunID, actions: actions)
                                 }
                                 .id(row.id)
                                 .background {
@@ -250,17 +254,10 @@ struct CloudConversation: View {
                     scrollState.setNearBottom(false)
                     scroll { $0.scrollTo(y: y) }
                 }
-                .environment(\.conversationTranscriptInteraction) {
-                    transcriptOwnsScroll = true
-                    // Pin where the reader is now, so what they opened or chose
-                    // stays where it is while it changes size.
-                    scroll { $0.scrollTo(y: hold.offset) }
-                    scrollState.setNearBottom(false)
-                }
-                .environment(\.conversationActivityDetails) { runID, activityID in
-                    guard let session else { return nil }
-                    return try await session.activityDetails(runID: runID, activityID: activityID)
-                }
+                // The same two closures on every pass, so the views reading
+                // them are not drawn again for it; each calls this pass's action.
+                .environment(\.conversationTranscriptInteraction, actions.forwardedInteraction)
+                .environment(\.conversationActivityDetails, actions.forwardedActivityDetails)
                 .defaultScrollAnchor(.bottom, for: .initialOffset)
                 // Following the latest reply, growth keeps the bottom in place
                 // in the same layout pass; a later scroll would show each
@@ -355,21 +352,43 @@ struct CloudConversation: View {
     private func messageRow(
         _ fragment: ConversationMessageRow,
         runs: [String: WorkspaceRunRecord],
-        activities: [String: [WorkspaceRunActivityRecord]]
+        activities: [String: [WorkspaceRunActivityRecord]],
+        actions: ConversationRowActions
     ) -> some View {
         let message = fragment.message
         let run = runs[message.id]
+        // A row whose data is the same as in the last pass is not drawn again.
         MessageRow(
             message: message,
             run: run.flatMap { $0.status == .queued ? nil : $0 },
             activities: run.map { activities[$0.id] ?? [] } ?? [],
-            onOpenAttachment: openAttachment,
-            resolveFile: { source in
-                try await model.library.fileURL(id: WorkspaceLibraryItem.identifier(messageID: message.libraryItemID, source: source))
-            },
             layout: fragment.layout,
-            onNewSession: message.id == session?.goneNoticeID && conversation?.isArchived == false ? onNewSession : nil
+            offersNewSession: message.id == session?.goneNoticeID && conversation?.isArchived == false && onNewSession != nil,
+            actions: actions
         )
+        .equatable()
+    }
+
+    /// `rowActions`, set to act for the chat as it is in this pass.
+    private func refreshedRowActions() -> ConversationRowActions {
+        let actions = rowActions
+        actions.openAttachment = { attachment in openAttachment(attachment) }
+        actions.resolveFile = { libraryItemID, source in
+            try await model.library.fileURL(id: WorkspaceLibraryItem.identifier(messageID: libraryItemID, source: source))
+        }
+        actions.newSession = { onNewSession?() }
+        actions.transcriptInteraction = {
+            transcriptOwnsScroll = true
+            // Pin where the reader is now, so what they opened or chose
+            // stays where it is while it changes size.
+            scroll { $0.scrollTo(y: hold.offset) }
+            scrollState.setNearBottom(false)
+        }
+        actions.activityDetails = { runID, activityID in
+            guard let session else { return nil }
+            return try await session.activityDetails(runID: runID, activityID: activityID)
+        }
+        return actions
     }
 
     // MARK: Bottom stack
@@ -653,15 +672,11 @@ struct CloudConversation: View {
     }
 
     private var runsByAssistantMessageID: [String: WorkspaceRunRecord] {
-        (session?.runs ?? []).reduce(into: [:]) {
-            if let assistantMessageID = $1.assistantMessageID {
-                $0[assistantMessageID] = $1
-            }
-        }
+        session?.runsByAssistantMessageID ?? [:]
     }
 
     private var activitiesByRunID: [String: [WorkspaceRunActivityRecord]] {
-        Dictionary(grouping: session?.runActivities ?? [], by: \.runID)
+        session?.activitiesByRunID ?? [:]
     }
 
     /// An empty reply to a run that has not started yet is not shown.
@@ -924,39 +939,55 @@ func nonemptyString(_ value: String?) -> String? {
     return trimmed
 }
 
-struct MessageRow: View {
+/// What a transcript's rows and views ask its chat to do. One object for the
+/// chat view's life, so rows compare equal from pass to pass; the chat sets
+/// its actions again on every pass, so each acts for the chat as it is then.
+/// Rows pass what is theirs (the item a file belongs to) as arguments.
+@MainActor
+final class ConversationRowActions {
+    var openAttachment: (SessionMessageAttachment) -> Void = { _ in }
+    /// The URL of a file a reply refers to: the item whose library entries carry it, and its source.
+    var resolveFile: (_ libraryItemID: String, _ source: String) async throws -> URL = { _, _ in throw CancellationError() }
+    var newSession: () -> Void = {}
+    var transcriptInteraction: @MainActor () -> Void = {}
+    var activityDetails: @MainActor (_ runID: String, _ activityID: String) async throws -> AgentRunActivity? = { _, _ in nil }
+
+    /// The two the transcript's environment carries, each made once, so the
+    /// views reading them see the same closure on every pass.
+    private(set) lazy var forwardedInteraction: @MainActor () -> Void = { [weak self] in
+        self?.transcriptInteraction()
+    }
+    private(set) lazy var forwardedActivityDetails: @MainActor (_ runID: String, _ activityID: String) async throws
+        -> AgentRunActivity? = { [weak self] runID, activityID in
+            try await self?.activityDetails(runID, activityID)
+        }
+}
+
+struct MessageRow: View, Equatable {
     /// What Copy puts before a reply's text: its visual replies' text, if any.
     static func copyLead(_ keys: [String]) -> (@MainActor @Sendable () async -> String?)? {
         guard !keys.isEmpty else { return nil }
         return { @MainActor @Sendable in await ConversationVisualReplyText.text(of: keys) }
     }
 
-    /// Whether reply text opens with a box: fenced code or a table.
-    static func startsWithBox(_ text: String) -> Bool {
-        guard let first = text.split(whereSeparator: \.isNewline).first(where: {
-            !$0.trimmingCharacters(in: .whitespaces).isEmpty
-        })?.trimmingCharacters(in: .whitespaces) else { return false }
-        return first.hasPrefix("```") || first.hasPrefix("~~~") || first.hasPrefix("|")
-    }
-
     let message: WorkspaceMessageRecord
     let run: WorkspaceRunRecord?
     let activities: [WorkspaceRunActivityRecord]
-    let onOpenAttachment: (SessionMessageAttachment) -> Void
-    let resolveFile: (String) async throws -> URL
     let layout: ConversationMessageLayout.Row
-    var onNewSession: (() -> Void)? = nil
+    /// The notice that the chat's native session is gone offers a new chat.
+    let offersNewSession: Bool
+    let actions: ConversationRowActions
     @Environment(\.conversationCopyScope) private var copyScope
+
+    /// The same data draws the same row: a pass of the transcript for its
+    /// scroll or layout leaves the row as it is.
+    nonisolated static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.message == rhs.message && lhs.run == rhs.run && lhs.activities == rhs.activities && lhs.layout == rhs.layout
+            && lhs.offersNewSession == rhs.offersNewSession && lhs.actions === rhs.actions
+    }
 
     private var isStreaming: Bool {
         AssistantStreamingText.isStreaming(messageStatus: message.status, runStatus: run?.status)
-    }
-    /// The reply's text, apart from the commentary the work log shows.
-    private var transcript: (body: String, commentaryIDs: Set<String>) {
-        let work = activities.map(\.activity)
-        return ConversationWorkTimeline.displayPartition(
-            AssistantTranscriptProjection(messageID: message.id, content: message.content, activities: work),
-            activities: work)
     }
 
     var body: some View {
@@ -965,8 +996,8 @@ struct MessageRow: View {
                 Image(systemName: "info.circle")
                 Text(message.content)
                     .lineLimit(1)
-                if let onNewSession {
-                    ConversationTextButton("New Chat", action: onNewSession)
+                if offersNewSession {
+                    ConversationTextButton("New Chat") { actions.newSession() }
                 }
             }
             .font(.system(size: 12))
@@ -986,22 +1017,25 @@ struct MessageRow: View {
                         content: message.senderKind == .goal ? "Continuing toward the goal." : message.content,
                         attachments: message.attachments,
                         references: message.references,
-                        onOpenAttachment: onOpenAttachment
+                        onOpenAttachment: { actions.openAttachment($0) }
                     )
                 }
             }
             .fixedSize(horizontal: false, vertical: true)
         } else {
-            assistantTurn(transcript)
+            assistantTurn(AssistantTurnDisplays.display(
+                sessionID: message.conversationID, messageID: message.id, content: message.content,
+                isStreaming: isStreaming, records: activities))
         }
     }
 
-    /// The partition is worked out once per update and shared by every part.
+    /// The display is worked out once for each change of the reply or its
+    /// run's records, and shared by every part.
     @ViewBuilder
-    private func assistantTurn(_ transcript: (body: String, commentaryIDs: Set<String>)) -> some View {
-        let reply = isStreaming ? AssistantStreamingText.readyPrefix(of: transcript.body) : transcript.body
+    private func assistantTurn(_ display: AssistantTurnDisplay) -> some View {
+        let reply = display.reply
         // Text the work transcript leaves to the response below it.
-        let hasResponseText = !reply.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let hasResponseText = display.hasResponseText
         let showsReply = ConversationMessageLayout.showsAssistantBody(
             content: message.content,
             displayedBody: reply,
@@ -1018,10 +1052,11 @@ struct MessageRow: View {
                     ConversationWorkTranscript(
                         run: run,
                         records: activities,
-                        commentaryIDs: transcript.commentaryIDs,
+                        commentaryIDs: display.commentaryIDs,
                         hasFollowingResponse: hasResponseText && showsReply,
-                        replyStartsWithBox: Self.startsWithBox(reply),
-                        timeline: ConversationWorkTimeline(records: activities, commentaryIDs: transcript.commentaryIDs)
+                        replyStartsWithBox: display.replyStartsWithBox,
+                        timeline: display.timeline,
+                        orderedActivities: display.orderedActivities
                     )
                 }
                 if showsReply {
@@ -1031,7 +1066,9 @@ struct MessageRow: View {
                         isCut: !isStreaming && (run?.status == .cancelled || run?.status == .failed),
                         // The running turn's dots, under the text it is writing.
                         showsRunningDots: run?.status == .running && hasResponseText,
-                        fileRow: ConversationFileRow(messageID: message.libraryItemID, resolveFile: resolveFile)
+                        fileRow: ConversationFileRow(messageID: message.libraryItemID) { [actions, libraryItemID = message.libraryItemID] source in
+                            try await actions.resolveFile(libraryItemID, source)
+                        }
                     )
                     // Copy takes the whole answer: the visual replies' text above the reply's.
                     .environment(\.conversationCopyLead, Self.copyLead(visualKeys))
@@ -1277,6 +1314,8 @@ private struct ConversationVisualReplyCopyButton: View {
     private static weak var keyWindow: NSWindow?
     private static var monitor: Any?
     private static var users = 0
+    /// Where the views `wheelScrollViews` holds were found under the pointer.
+    private static var lastHit: (window: ObjectIdentifier, location: NSPoint)?
 
     /// A wheel or the pointer over this transcript, or a navigation key in its
     /// window while it is the active panel, within the last half second; or
@@ -1299,6 +1338,8 @@ private struct ConversationVisualReplyCopyButton: View {
         }
         wheelScrollViews = scrollViews
         lastWheel = Date()
+        // Found for no pointer location the monitor knows (the monitor sets its own).
+        lastHit = nil
     }
 
     /// Watches the app's own wheel and navigation-key events while any
@@ -1312,10 +1353,18 @@ private struct ConversationVisualReplyCopyButton: View {
         monitor = NSEvent.addLocalMonitorForEvents(matching: [.scrollWheel, .keyDown, .leftMouseDown, .leftMouseDragged]) { event in
             // A drag on the scroller, or one selecting text past the edge, scrolls
             // too; one resizing the window does not.
-            if event.type != .keyDown, let content = event.window?.contentView, event.window?.inLiveResize != true {
-                // `hitTest` takes a point in the receiver's superview's coordinates.
-                let point = content.superview?.convert(event.locationInWindow, from: nil) ?? event.locationInWindow
-                noteWheel(over: content.hitTest(point))
+            if event.type != .keyDown, let window = event.window, let content = window.contentView, !window.inLiveResize {
+                // Within one trackpad scroll the pointer stays where it was,
+                // over the same scroll views: those found for it still hold.
+                let continuing = event.type == .scrollWheel && (event.phase == .changed || event.momentumPhase == .changed)
+                if continuing, let lastHit, lastHit.window == ObjectIdentifier(window), lastHit.location == event.locationInWindow {
+                    lastWheel = Date()
+                } else {
+                    // `hitTest` takes a point in the receiver's superview's coordinates.
+                    let point = content.superview?.convert(event.locationInWindow, from: nil) ?? event.locationInWindow
+                    noteWheel(over: content.hitTest(point))
+                    lastHit = (ObjectIdentifier(window), event.locationInWindow)
+                }
             } else if event.type == .keyDown, keys.contains(event.keyCode), let window = NSApp.keyWindow,
                       (window.firstResponder as? NSText)?.isEditable != true {
                 keyWindow = window

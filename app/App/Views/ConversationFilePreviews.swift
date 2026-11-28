@@ -11,8 +11,14 @@ struct ConversationFileRow {
     let resolveFile: (String) async throws -> URL
 
     static func files(in content: String) -> [LibraryAsset] {
-        LibraryLinkDiscovery.links(in: content).filter { LibraryFileReference.path($0.source) != nil }
+        // Found once for each text: the reply asks on every pass.
+        if let kept = found.value(content) { return kept }
+        let files = LibraryLinkDiscovery.links(in: content).filter { LibraryFileReference.path($0.source) != nil }
+        found.insert(content, files)
+        return files
     }
+
+    private static var found = WorkTimelineGenerations<String, [LibraryAsset]>(limit: 512)
 
     /// One chip per file, each with its own actions. A link in the reply's
     /// text to a file opens the first chip for that file's path.

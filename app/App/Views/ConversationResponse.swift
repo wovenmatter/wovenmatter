@@ -1883,7 +1883,8 @@ struct ConversationUserBubble<Attachments: View>: View {
     private static var hiddenLines: Int { 3 }
 
     var body: some View {
-        let isLong = collapses
+        let naturalContentWidth = self.naturalContentWidth
+        let isLong = collapses(naturalContentWidth: naturalContentWidth)
         VStack(alignment: .trailing, spacing: ConversationMetrics.rowGap) {
             if !content.isEmpty {
                 Text(content)
@@ -1906,7 +1907,8 @@ struct ConversationUserBubble<Attachments: View>: View {
                 .foregroundStyle(WovenPalette.mutedForeground)
             }
         }
-        .frame(maxWidth: isLong ? max(naturalContentWidth, Self.controlWidth) : naturalContentWidth, alignment: .trailing)
+        .frame(maxWidth: isLong ? max(naturalContentWidth, ConversationUserBubbleMeasure.controlWidth) : naturalContentWidth,
+               alignment: .trailing)
         .padding(ConversationMetrics.bubbleInsets)
         .background(WovenPalette.primary.opacity(0.13))
         .clipShape(RoundedRectangle(cornerRadius: WovenMetrics.composerRadius, style: .continuous))
@@ -1918,12 +1920,35 @@ struct ConversationUserBubble<Attachments: View>: View {
     /// Whether the message is long enough that collapsing it earns the row
     /// its control: its lines at the width it has before any widening for
     /// the control, the room offered or its longest line, whichever is less.
-    private var collapses: Bool {
+    private func collapses(naturalContentWidth: CGFloat) -> Bool {
         let room = offeredWidth.map { $0 - ConversationMetrics.bubbleInsets.leading - ConversationMetrics.bubbleInsets.trailing }
-        return lineCount(width: min(naturalContentWidth, room ?? naturalContentWidth)) >= Self.collapsedLines + Self.hiddenLines
+        return ConversationUserBubbleMeasure.lineCount(content, width: min(naturalContentWidth, room ?? naturalContentWidth))
+            >= Self.collapsedLines + Self.hiddenLines
     }
 
-    private func lineCount(width: CGFloat) -> Int {
+    /// The width of the message's longest line, within the bubble's limit.
+    private var naturalContentWidth: CGFloat {
+        if hasAttachments { return 420 }
+        return ConversationUserBubbleMeasure.naturalWidth(content)
+    }
+}
+
+/// A user message's measurements, each made once for its text (and width):
+/// the bubble asks for them on every pass.
+@MainActor
+enum ConversationUserBubbleMeasure {
+    private struct Lines: Hashable {
+        let content: String
+        let width: CGFloat
+    }
+
+    private static var widths = WorkTimelineGenerations<String, CGFloat>(limit: 512)
+    private static var lines = WorkTimelineGenerations<Lines, Int>(limit: 512)
+
+    /// How many lines the message takes at `width`.
+    static func lineCount(_ content: String, width: CGFloat) -> Int {
+        let key = Lines(content: content, width: width)
+        if let kept = lines.value(key) { return kept }
         let font = ResponseFont.systemFont(ofSize: 15)
         let spacing = ConversationMetrics.Prose.lineSpacing
         let style = NSMutableParagraphStyle()
@@ -1932,21 +1957,25 @@ struct ConversationUserBubble<Attachments: View>: View {
             with: CGSize(width: max(1, width), height: .greatestFiniteMagnitude),
             options: [.usesLineFragmentOrigin], attributes: [.font: font, .paragraphStyle: style]).height
         let line = NSLayoutManager().defaultLineHeight(for: font)
-        return Int(((height + spacing) / (line + spacing)).rounded())
+        let count = Int(((height + spacing) / (line + spacing)).rounded())
+        lines.insert(key, count)
+        return count
     }
 
     /// The width of the message's longest line, within the bubble's limit.
-    private var naturalContentWidth: CGFloat {
-        if hasAttachments { return 420 }
+    static func naturalWidth(_ content: String) -> CGFloat {
+        if let kept = widths.value(content) { return kept }
         let font = ResponseFont.systemFont(ofSize: 15)
         let longestLine = content.split(separator: "\n", omittingEmptySubsequences: false)
             .map { ($0 as NSString).size(withAttributes: [.font: font]).width }.max() ?? 0
-        return min(586, max(1, ceil(longestLine)))
+        let width = min(586, max(1, ceil(longestLine)))
+        widths.insert(content, width)
+        return width
     }
 
     /// Room for the control under a message that collapses, however narrow its lines.
-    private static var controlWidth: CGFloat {
+    static let controlWidth: CGFloat = {
         let font = ResponseFont.systemFont(ofSize: 12.5, weight: .medium)
         return ceil(["Show full message", "Show less"].map { ($0 as NSString).size(withAttributes: [.font: font]).width }.max() ?? 0)
-    }
+    }()
 }

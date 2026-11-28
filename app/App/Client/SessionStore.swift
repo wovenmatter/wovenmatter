@@ -15,6 +15,11 @@ final class SessionStore {
     private(set) var messages: [WorkspaceMessageRecord] = []
     private(set) var runs: [WorkspaceRunRecord] = []
     private(set) var runActivities: [WorkspaceRunActivityRecord] = []
+    /// `runActivities` by run, and each reply's run, grouped once for each
+    /// change of them: the transcript reads them on every pass, and a row
+    /// whose run's records are the same array draws nothing again.
+    private(set) var activitiesByRunID: [String: [WorkspaceRunActivityRecord]] = [:]
+    private(set) var runsByAssistantMessageID: [String: WorkspaceRunRecord] = [:]
     private(set) var taskProgress: ConversationTaskProgress?
     private(set) var hasOlderMessages = false
     private(set) var isLoadingOlderMessages = false
@@ -526,10 +531,15 @@ final class SessionStore {
             let drawn = record.activity.kind == .thought ? record.activity.content : record.activity.rawOutputJSON
             let grew = call.kind == .thinking ? readyGrew(itemID, in: call.output ?? "") : delta.contains(where: \.isNewline)
             guard grew || drawn?.isEmpty != false else { return true }
-            runActivities[shown] = WorkspaceRunActivityRecord(
+            let updated = WorkspaceRunActivityRecord(
                 id: record.id, runID: record.runID, conversationID: record.conversationID,
                 activity: Self.activity(call, id: itemID, live: true, position: record.activity.position ?? 0, claudeCode: runsClaudeCode),
                 createdAt: record.createdAt, sequence: record.sequence)
+            runActivities[shown] = updated
+            // The same record in its run's group, as grouping again would place it.
+            if let grouped = activitiesByRunID[record.runID]?.lastIndex(where: { $0.id == itemID }) {
+                activitiesByRunID[record.runID]?[grouped] = updated
+            }
             return true
         default:
             return false
@@ -557,11 +567,13 @@ final class SessionStore {
         // not a thought: a call of ACP's kind `think` from its first report,
         // whose input streams in as `{}`, then `{description}`, then the
         // rest, the prompt last; and any call with a prompt and a
-        // description. Another runtime's tool of that name is its own.
-        let input = (try? JSONSerialization.jsonObject(with: Data(call.input.utf8))) as? [String: Any]
-        let delegation = claudeCode
-            && (call.name == "think" && (input?.isEmpty ?? call.input.isEmpty || input?["description"] is String)
-                || input?["prompt"] is String && input?["description"] is String)
+        // description. Another runtime's tool of that name is its own, so
+        // only a Claude Code call's input is read.
+        let delegation = claudeCode && {
+            let input = (try? JSONSerialization.jsonObject(with: Data(call.input.utf8))) as? [String: Any]
+            return call.name == "think" && (input?.isEmpty ?? call.input.isEmpty || input?["description"] is String)
+                || input?["prompt"] is String && input?["description"] is String
+        }()
         let thought = call.kind == .thinking && !delegation
         return AgentRunActivity(
             id: id, kind: thought ? .thought : call.kind == .plan ? .plan : .tool,
@@ -621,6 +633,17 @@ final class SessionStore {
     }
 
     private static let timestamps = ISO8601DateFormatter()
+    /// Each finished item's time as its records carry it, formatted once.
+    @ObservationIgnored private var savedTimes: [String: (date: Date, text: String)] = [:]
+
+    /// An item's time as its records carry it. An item in progress is timed
+    /// anew on each projection, so only a finished one's is kept.
+    private func timestamp(id: String, date: Date, live: Bool) -> String {
+        if !live, let kept = savedTimes[id], kept.date == date { return kept.text }
+        let text = Self.timestamps.string(from: date)
+        if !live { savedTimes[id] = (date, text) }
+        return text
+    }
 
     /// The one reply of a run.
     private static func replyID(_ runID: String) -> String { "reply-" + runID }
@@ -654,6 +677,12 @@ final class SessionStore {
     /// So text, tools and more text add to what is drawn and never move it.
     private func project() {
         var messages: [WorkspaceMessageRecord] = []
+        /// The last of `messages` with each ID, as every message is added through `append`.
+        var messageIndex: [String: Int] = [:]
+        func append(_ message: WorkspaceMessageRecord) {
+            messageIndex[message.id] = messages.count
+            messages.append(message)
+        }
         var liveReplies: [String: (messageID: String, before: String)] = [:]
         var runs: [WorkspaceRunRecord] = []
         var activities: [WorkspaceRunActivityRecord] = []
@@ -684,8 +713,8 @@ final class SessionStore {
                   runs[last].status == .failed || runs[last].status == .cancelled
                     || activities.last?.runID == runs[last].id else { return }
             let id = Self.replyID(runs[last].id)
-            messages.append(WorkspaceMessageRecord(id: id, conversationID: sessionID, role: .assistant, content: "",
-                                                   status: .complete, createdAt: runs[last].completedAt ?? runs[last].startedAt ?? Date()))
+            append(WorkspaceMessageRecord(id: id, conversationID: sessionID, role: .assistant, content: "",
+                                          status: .complete, createdAt: runs[last].completedAt ?? runs[last].startedAt ?? Date()))
             runs[last].assistantMessageID = id
         }
 
@@ -722,7 +751,7 @@ final class SessionStore {
                 }
                 closeRun()
                 ended = false
-                messages.append(WorkspaceMessageRecord(
+                append(WorkspaceMessageRecord(
                     id: entry.id, conversationID: sessionID, role: .user, content: text, status: .complete, createdAt: entry.date,
                     attachments: attachments.map {
                         SessionMessageAttachment(id: $0.digest, kind: $0.mimeType.hasPrefix("image/") ? .image : .file,
@@ -734,11 +763,11 @@ final class SessionStore {
                 let run = currentRun(at: entry.date, id: entry.id, live: entry.live)
                 let id = Self.replyID(runs[run].id)
                 let shown: Int
-                if let index = messages.lastIndex(where: { $0.id == id }) {
+                if let index = messageIndex[id] {
                     shown = index
                 } else {
-                    messages.append(WorkspaceMessageRecord(id: id, conversationID: sessionID, role: .assistant, content: "",
-                                                           status: .complete, createdAt: entry.date))
+                    append(WorkspaceMessageRecord(id: id, conversationID: sessionID, role: .assistant, content: "",
+                                                  status: .complete, createdAt: entry.date))
                     shown = messages.count - 1
                 }
                 if entry.live { liveReplies[entry.id] = (id, messages[shown].content) }
@@ -750,7 +779,7 @@ final class SessionStore {
                         id: entry.id, runID: runs[run].id, conversationID: sessionID,
                         activity: AgentRunActivity(id: entry.id, kind: .assistant, content: text, assistantMessageID: id,
                                                    position: position),
-                        createdAt: Self.timestamps.string(from: entry.date), sequence: Int64(position)))
+                        createdAt: timestamp(id: entry.id, date: entry.date, live: entry.live), sequence: Int64(position)))
                 }
                 runs[run].assistantMessageID = id
                 extend(run, to: entry.date, live: entry.live)
@@ -762,15 +791,15 @@ final class SessionStore {
                 activities.append(WorkspaceRunActivityRecord(
                     id: entry.id, runID: runs[run].id, conversationID: sessionID,
                     activity: Self.activity(call, id: entry.id, live: entry.live, position: position, claudeCode: runsClaudeCode),
-                    createdAt: Self.timestamps.string(from: entry.date), sequence: Int64(position)))
+                    createdAt: timestamp(id: entry.id, date: entry.date, live: entry.live), sequence: Int64(position)))
             case .visualReply(let reply):
                 let run = currentRun(at: entry.date, id: entry.id, live: entry.live)
                 extend(run, to: entry.date, live: entry.live)
                 // A visual reply is a reply even before any words, so its run is drawn.
                 if runs[run].assistantMessageID == nil {
                     let id = Self.replyID(runs[run].id)
-                    messages.append(WorkspaceMessageRecord(id: id, conversationID: sessionID, role: .assistant, content: "",
-                                                           status: .complete, createdAt: entry.date))
+                    append(WorkspaceMessageRecord(id: id, conversationID: sessionID, role: .assistant, content: "",
+                                                  status: .complete, createdAt: entry.date))
                     runs[run].assistantMessageID = id
                 }
                 activities.append(WorkspaceRunActivityRecord(
@@ -779,7 +808,7 @@ final class SessionStore {
                         id: entry.id, kind: .activity, title: reply.title, status: "completed", position: position,
                         htmlRender: ConversationHTMLRenderReference(id: entry.id, title: reply.title, height: reply.height, width: reply.width,
                                                                     digest: reply.digest, opensWithTitle: reply.opensWithTitle)),
-                    createdAt: Self.timestamps.string(from: entry.date), sequence: Int64(position)))
+                    createdAt: timestamp(id: entry.id, date: entry.date, live: entry.live), sequence: Int64(position)))
             case .notice(let notice):
                 if notice.kind == .nativeSessionGone { goneNotice = entry.id }
                 // When the turn ended, as its server saved it: it times the
@@ -804,8 +833,8 @@ final class SessionStore {
                 } else {
                     // A stopped turn's work shows before the notice that says it stopped.
                     if notice.kind == .interrupted { closeRun() }
-                    messages.append(WorkspaceMessageRecord(id: entry.id, conversationID: sessionID, role: .system,
-                                                           content: notice.text, status: .complete, createdAt: entry.date))
+                    append(WorkspaceMessageRecord(id: entry.id, conversationID: sessionID, role: .system,
+                                                  content: notice.text, status: .complete, createdAt: entry.date))
                 }
             }
         }
@@ -821,8 +850,8 @@ final class SessionStore {
             // Work before the first words of the reply shows under a reply that is still arriving.
             if runs[last].assistantMessageID == nil || messages.last?.role == .user {
                 let id = Self.replyID(runs[last].id)
-                messages.append(WorkspaceMessageRecord(id: id, conversationID: sessionID, role: .assistant, content: "",
-                                                       status: .streaming, createdAt: Date()))
+                append(WorkspaceMessageRecord(id: id, conversationID: sessionID, role: .assistant, content: "",
+                                              status: .streaming, createdAt: Date()))
                 runs[last].assistantMessageID = id
             }
         }
@@ -833,6 +862,10 @@ final class SessionStore {
         self.messages = messages
         self.runs = runs
         runActivities = activities
+        activitiesByRunID = Dictionary(grouping: activities, by: \.runID)
+        runsByAssistantMessageID = runs.reduce(into: [:]) {
+            if let assistantMessageID = $1.assistantMessageID { $0[assistantMessageID] = $1 }
+        }
         // The running turn's latest checklist, from its plan tool calls.
         let progress = run == .running ? runs.last.flatMap { ConversationTaskProgress.latest(in: activities, activeRunID: $0.id) } : nil
         if progress != taskProgress { taskProgress = progress }
