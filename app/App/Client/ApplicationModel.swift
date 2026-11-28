@@ -35,6 +35,8 @@ final class ApplicationModel {
     /// This Mac's connection and one to each other machine's server.
     private(set) var machineConnections: MachineConnections?
     @ObservationIgnored private var following: Task<Void, Never>?
+    /// Other machines whose server the UI was connected to when last looked at.
+    @ObservationIgnored private var connectedRemotes: Set<String> = []
 
     let navigation = NavigationStore()
     let machines = MachinesStore()
@@ -77,6 +79,15 @@ final class ApplicationModel {
         self.server = server
         let machineConnections = MachineConnections(local: server)
         self.machineConnections = machineConnections
+        // The schedules' last runs and the databases' owners are read from each
+        // owner while it is connected: a machine that connects after the first
+        // read, as one on the tailnet usually does, has them read again.
+        machineConnections.whenChanged { [weak self, weak machineConnections] in
+            guard let self, let machineConnections else { return }
+            let connected = Set(machineConnections.remotes.filter { $0.value.isConnected }.map(\.key))
+            if !connected.isSubset(of: connectedRemotes) { requestReload(["schedules", "databases"]) }
+            connectedRemotes = connected
+        }
         machines.attach(machineConnections)
         usage.attach(server, machines: machines)
         workspace.attach(server, machines: machines)
