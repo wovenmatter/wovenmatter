@@ -1825,15 +1825,7 @@
           "conversationId": 4,
           "createdAt": 1795080600000,
           "kind": "assistant",
-          "text": "Looking at the log.",
-          "usage": {
-            "model": "openai-codex/gpt-6-sol",
-            "input": 1200,
-            "output": 80,
-            "cacheRead": 900,
-            "cacheWrite": 0,
-            "cost": 0.0021
-          }
+          "text": "Looking at the log."
         },
         {
           "key": "14.1",
@@ -1936,22 +1928,6 @@
               "output": "ok",
               "failed": false
             }
-          }
-        }
-      ],
-      "seatUsage": [
-        {
-          "botId": "6f1d2c3b-4a59-4e8f-9a0b-1c2d3e4f5a6b",
-          "key": "21",
-          "roomId": 1,
-          "createdAt": 1795080600000,
-          "usage": {
-            "model": "openai-codex/gpt-6-sol",
-            "input": 300,
-            "output": 20,
-            "cacheRead": 0,
-            "cacheWrite": 0,
-            "cost": 0.0004
           }
         }
       ],

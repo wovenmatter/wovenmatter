@@ -111,6 +111,8 @@ actor SessionManager {
   nonisolated let configurations: RuntimeConfigurations
   /// Told of the person's first message in each session, for its title.
   nonisolated let firstMessages = FirstMessageHook()
+  /// Told when a turn of a runtime that keeps its own history ends.
+  nonisolated let historyTurns = HistoryTurnHook()
 
   init(library: Library, runtimes: [any Runtime], scratch: URL, toolKeys: ToolKeys? = nil) {
     self.toolKeys = toolKeys
@@ -199,7 +201,7 @@ actor SessionManager {
     let host = SessionHost(sessionID: sessionID, library: library, runtime: runtime, gone: gone, board: board,
                            configurations: configurations,
                            tools: toolKeys?.access(runtime.sharesToolBridge ? .runtime(runtime.kind) : .session(sessionID)),
-                           firstMessages: firstMessages)
+                           firstMessages: firstMessages, historyTurns: historyTurns)
     hosts[sessionID] = host
     return host
   }
@@ -294,10 +296,13 @@ actor SessionHost {
   /// opens and kept by each save, so a call's start needs no read.
   private var lastSequence: Int?
   private let firstMessages: FirstMessageHook?
+  private let historyTurns: HistoryTurnHook?
 
   init(sessionID: String, library: Library, runtime: any Runtime, gone: Bool, board: RunBoard,
-       configurations: RuntimeConfigurations, tools: ToolAccess? = nil, firstMessages: FirstMessageHook? = nil) {
+       configurations: RuntimeConfigurations, tools: ToolAccess? = nil, firstMessages: FirstMessageHook? = nil,
+       historyTurns: HistoryTurnHook? = nil) {
     self.firstMessages = firstMessages
+    self.historyTurns = historyTurns
     self.tools = tools
     self.sessionID = sessionID
     self.library = library
@@ -702,7 +707,7 @@ actor SessionHost {
     case .configuration(let configuration):
       adopt(configuration)
       await saveChoices()
-    case .turnFinished(let failure, let usage):
+    case .turnFinished(let failure):
       await saving { try await self.finishOpenItems() }
       if let failure {
         await saving { try await self.finish(.notice(Notice(kind: .failure, text: failure)), id: UUID().uuidString.lowercased()) }
@@ -711,12 +716,6 @@ actor SessionHost {
         stoppedBy = nil
         await saving { try await self.finish(.notice(Notice(kind: .interrupted, text: "Stopped by \(stopper).")),
                                              id: UUID().uuidString.lowercased()) }
-      }
-      // A harness with its own history is counted from there (`UsageScanner`).
-      if let usage, !runtime.kind.usageFromHistory {
-        try? await library.recordUsage(sessionID: sessionID, runtime: runtime.kind, model: usage.model ?? configuration.model ?? "",
-                                       input: usage.input, output: usage.output, cacheRead: usage.cacheRead,
-                                       cacheWrite: usage.cacheWrite)
       }
       await endTurn()
       // Before anything starts the next turn.
@@ -838,6 +837,7 @@ actor SessionHost {
   /// ran, and the running flag clears in the same write.
   private func leaveRun(to state: RunState) async {
     if run == .running {
+      turnEnded()
       do {
         try await finish(.notice(Notice(kind: .turnEnded, text: stopAsked ? "stopped" : "")), id: UUID().uuidString.lowercased(),
                          endingTurn: true)
@@ -848,6 +848,12 @@ actor SessionHost {
     } else if run != state {
       setRun(state)
     }
+  }
+
+  /// A running turn ended, however: a harness with its own history is told
+  /// to have its usage read soon (`UsageScanner`).
+  private func turnEnded() {
+    if runtime.kind.usageFromHistory { historyTurns?.tell() }
   }
 
   /// Tells every open view the session's goal now.

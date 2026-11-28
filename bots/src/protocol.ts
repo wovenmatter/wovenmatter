@@ -753,17 +753,6 @@ export type MirrorItem = {
   visualReply?: VisualReply;
   /** user: an agent session that sent it (`message_bot`), not the person. */
   from?: { name: string; sessionId: string };
-  /** One model turn's usage, on the first item of that turn (its text when it has any). */
-  usage?: {
-    /** `provider/model`. */
-    model: string;
-    input: number;
-    output: number;
-    cacheRead: number;
-    cacheWrite: number;
-    /** USD. */
-    cost: number;
-  };
 };
 
 /** One bot's conversations and the finished items above the server's checkpoint. */
@@ -787,15 +776,6 @@ export type MirrorBot = {
   upTo: number;
 };
 
-/** One model turn's usage in a bot's Forum seat, keyed like items (`<entryId>` or `<entryId>.<n>`). */
-export type MirrorSeatUsage = {
-  botId: string;
-  key: string;
-  roomId: number;
-  createdAt: number;
-  usage: NonNullable<MirrorItem["usage"]>;
-};
-
 export type MirrorForum = {
   rooms: { roomId: number; parentPostId?: number; title?: string; pinned?: boolean; createdAt: string }[];
   /** Sorted by id. At most 200. */
@@ -817,8 +797,6 @@ export type MirrorForum = {
    * order with the posts, under the bot's name. `conversationId` is the seat's room.
    */
   seatItems?: { botId: string; name: string; item: MirrorItem }[];
-  /** Every model turn of the bots' seats, whatever it said. */
-  seatUsage?: MirrorSeatUsage[];
   /** Each bot's seat entries through this id are covered. */
   seats?: Record<string, number>;
   /** Posts through this id are covered. */

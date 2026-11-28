@@ -205,7 +205,6 @@ describe("a bot's turns in the library", () => {
   };
   const posts = () => library.forum.flatMap((push) => push.posts);
   const seatItems = () => library.forum.flatMap((push) => push.seatItems ?? []);
-  const seatUsage = () => library.forum.flatMap((push) => push.seatUsage ?? []);
 
   it("saves a chat turn's message, thinking, tool call with its input and output, and answer, once and in order", async () => {
     const bot = await start();
@@ -219,17 +218,16 @@ describe("a bot's turns in the library", () => {
       ["tool", { name: "woven_list_places", input: "{}", output: placesText, failed: false }],
       ["assistant", "Here it is."],
     ]);
-    // From the session that sent it, not the person; each model turn's usage once.
+    // From the session that sent it, not the person.
     expect(items[0]?.from).toEqual({ name: "Build", sessionId: "s-1" });
-    expect(items.filter((item) => item.usage)).toHaveLength(2);
     expect(new Set(items.map((item) => item.key)).size).toBe(items.length);
   });
 
-  it("saves a Forum turn's posts and its tool calls in the room, in time order, and each model turn's usage once", async () => {
+  it("saves a Forum turn's posts and its tool calls in the room, in time order", async () => {
     const bot = await start();
     await server.request("forum.open", {});
     await server.request("forum.post", { text: "A chart, please", mentions: [bot.id], context: "Open note: Q3 plan" });
-    await server.until(() => posts().length === 3 && seatUsage().length === 3);
+    await server.until(() => posts().length === 3 && seatItems().length === 2);
     await app.mirror.sweep();
     expect(posts().map((post) => [post.author, post.text, post.visualReply])).toEqual([
       ["user", "A chart, please", undefined],
@@ -252,35 +250,9 @@ describe("a bot's turns in the library", () => {
     const live = server.messages.flatMap((message: ServerMessage) => (message.type === "forum.post" ? [message.post as ForumPost] : []));
     expect(live.find((post) => post.id === 2)?.visualReply).toEqual(visualReply);
     expect(JSON.stringify([library.forum, live])).not.toContain("<h1>");
-    expect(new Set(seatUsage().map((usage) => usage.key)).size).toBe(3);
-    expect(seatUsage().every((usage) => usage.botId === bot.id && usage.roomId === 1)).toBe(true);
     // The bot heard the person's open notes with the post, as a chat message carries them.
     expect(JSON.stringify(library.items(bot.id))).not.toContain("Q3 plan");
     expect(library.bots.get(bot.id)?.every((push) => push.items.length === 0)).toBe(true);
-  });
-
-  it("still saves the usage of a thread's turns when the thread is deleted before they were pushed", async () => {
-    const bot = await start(600_000);
-    await app.mirror.sweep();
-    const { post } = await server.request<{ post: ForumPost }>("forum.post", { text: "A topic" });
-    const { thread } = await server.request<{ thread: { roomId: number } }>("forum.thread.create", { postId: post.id });
-    await server.request("forum.post", { roomId: thread.roomId, text: "Look it up", mentions: [bot.id] });
-    await app.forum.idle();
-    // Its answer is posted once its turn has ended.
-    const answered = async () =>
-      (await app.forum.store.postsAfter(thread.roomId, 0)).some((post) => post.text === "Here it is.");
-    for (let tries = 0; !(await answered()); tries += 1) {
-      if (tries > 300) throw new Error("the thread's turn never ended");
-      await new Promise((resolve) => setTimeout(resolve, 10));
-    }
-    expect(seatUsage()).toEqual([]);
-    await server.request("forum.thread.delete", { roomId: thread.roomId });
-    await app.mirror.sweep();
-    const used = seatUsage().filter((usage) => usage.roomId === thread.roomId);
-    // The call, the visual reply and the answer: three model turns.
-    expect(used).toHaveLength(3);
-    // Its tool calls went with the thread; its usage did not.
-    expect(seatItems().filter(({ item }) => item.conversationId === thread.roomId)).toEqual([]);
   });
 });
 
@@ -300,7 +272,7 @@ describe("library items", () => {
   const entry = (id: number, model: unknown[]): EntryRecord =>
     ({ id, conversationId: 1, kind: "pi.message", model }) as unknown as EntryRecord;
 
-  it("gives each tool call its result, puts a turn's usage on its text, and holds a call until its result", () => {
+  it("gives each tool call its result and holds a call until its result", () => {
     const user = entry(1, [{ role: "user", content: "list files", timestamp: 1000 }]);
     const call = entry(2, [
       assistant([
@@ -326,8 +298,7 @@ describe("library items", () => {
         conversationId: 1,
         createdAt: 2000,
         kind: "assistant",
-        text: "Looking.",
-        usage: { model: "openai/gpt-test", input: 10, output: 5, cacheRead: 2, cacheWrite: 1, cost: 0.25 },
+        text: "Looking."
       },
       {
         key: "2.1",
@@ -341,8 +312,7 @@ describe("library items", () => {
         conversationId: 1,
         createdAt: 2000,
         kind: "error",
-        text: "overloaded",
-        usage: { model: "openai/gpt-test", input: 10, output: 5, cacheRead: 2, cacheWrite: 1, cost: 0.25 },
+        text: "overloaded"
       },
       { key: "5", conversationId: 1, createdAt: 2000, kind: "assistant", text: "Partial" },
       { key: "5.1", conversationId: 1, createdAt: 2000, kind: "stopped" },

@@ -290,8 +290,7 @@ func mirrorPushIsSavedOnceWithItsCheckpoint() async throws {
      "items": [
        {"key": "3", "conversationId": 1, "createdAt": 1000, "kind": "user", "text": "Hello",
         "from": {"name": "Build", "sessionId": "s-1"}},
-       {"key": "4", "conversationId": 1, "createdAt": 2000, "kind": "assistant", "text": "Hi",
-        "usage": {"model": "p/m", "input": 10, "output": 5, "cacheRead": 0, "cacheWrite": 0, "cost": 0.01}},
+       {"key": "4", "conversationId": 1, "createdAt": 2000, "kind": "assistant", "text": "Hi"},
        {"key": "4.1", "conversationId": 1, "createdAt": 2001, "kind": "thinking", "text": "Look first."},
        {"key": "4.2", "conversationId": 1, "createdAt": 2002, "kind": "tool",
         "tool": {"name": "bash", "input": "ls", "output": "\(long)", "failed": false}}],
@@ -329,6 +328,40 @@ func mirrorPushIsSavedOnceWithItsCheckpoint() async throws {
   #expect(forum.session.title == "Forum")
   let posts = try await client.call(SessionItems(sessionID: forum.session.id))
   #expect(posts.map(\.author) == [ItemAuthor(botID: "b1", name: "Ada")])
+}
+
+/// A purge on the bots' host reads their store first, so what the bot's
+/// tables hold is counted before they go.
+@Test(.timeLimit(.minutes(1)))
+func aPurgeReadsTheBotsUsageFirst() async throws {
+  let runtime = StandInBotsRuntime()
+  let host = try await TestServer.start(name: "Studio", runtime: runtime)
+  defer { host.finishLater() }
+  let client = try await host.connect()
+  try await host.makeHost(client, runtime)
+  let reads = Mutex<[Bool]>([])
+  host.server.bots.usage.set(BotsUsageHook.Actions(read: {
+    reads.withLock { $0.append(runtime.received.contains { $0["type"]?.string == "bots.purge" }) }
+    return true
+  }, hold: { nil }, release: {}, install: { _ in }))
+  _ = try await client.call(BotsCall(request: json(#"{"type": "bots.purge", "botId": "b1"}"#)))
+  #expect(reads.withLock { $0 } == [false])
+  #expect(runtime.received.contains { $0["type"]?.string == "bots.purge" })
+}
+
+/// A purge whose read of the bots' store fails is refused, to be tried again.
+@Test(.timeLimit(.minutes(1)))
+func aPurgeWhoseUsageCannotBeReadIsRefused() async throws {
+  let runtime = StandInBotsRuntime()
+  let host = try await TestServer.start(name: "Studio", runtime: runtime)
+  defer { host.finishLater() }
+  let client = try await host.connect()
+  try await host.makeHost(client, runtime)
+  host.server.bots.usage.set(BotsUsageHook.Actions(read: { false }, hold: { nil }, release: {}, install: { _ in }))
+  await #expect(throws: (any Error).self) {
+    _ = try await client.call(BotsCall(request: json(#"{"type": "bots.purge", "botId": "b1"}"#)))
+  }
+  #expect(!runtime.received.contains { $0["type"]?.string == "bots.purge" })
 }
 
 @Test(.timeLimit(.minutes(1)))
@@ -404,9 +437,8 @@ func anotherServerSendsUIsToTheHostAndForwardsCalls() async throws {
 // MARK: Transfer
 
 /// Two linked servers; the first is the bots' host, its stand-in runtime
-/// holding one bot with a chat, a turn's usage, a Forum post, a visual reply
-/// it published in the Forum (its HTML in the first server's content store),
-/// a Forum turn's usage, and files.
+/// holding one bot with a chat, a Forum post, a visual reply it published in
+/// the Forum (its HTML in the first server's content store), and files.
 private struct TransferSetup {
   static let visualReplyHTML = Data("<h1>Build times</h1>".utf8)
   let a: TestServer, b: TestServer
@@ -435,8 +467,7 @@ private struct TransferSetup {
          "conversations": [{"conversationId": 1, "kind": "main", "createdAt": "2026-11-01T10:00:00.000Z"}],
          "items": [
            {"key": "3", "conversationId": 1, "createdAt": 1000, "kind": "user", "text": "Hello"},
-           {"key": "4", "conversationId": 1, "createdAt": 2000, "kind": "assistant", "text": "Hi",
-            "usage": {"model": "p/m", "input": 10, "output": 5, "cacheRead": 0, "cacheWrite": 0, "cost": 0.01}}],
+           {"key": "4", "conversationId": 1, "createdAt": 2000, "kind": "assistant", "text": "Hi"}],
          "upTo": 4}},
        {"method": "mirror.forum", "params": {
          "rooms": [{"roomId": 1, "createdAt": "2026-11-01T10:00:00.000Z"}],
@@ -445,8 +476,6 @@ private struct TransferSetup {
                     "visualReply": {"title": "Build times", "height": 320, "digest": "\(digest)", "size": 20}, "createdAt": 3100}],
          "seatItems": [{"botId": "b1", "name": "Ada", "item": {"key": "6", "conversationId": 1, "createdAt": 3050, "kind": "tool",
                         "tool": {"name": "bash", "input": "ls", "output": "a", "failed": false}}}],
-         "seatUsage": [{"botId": "b1", "key": "6", "roomId": 1, "createdAt": 3050,
-                        "usage": {"model": "p/m", "input": 7, "output": 2, "cacheRead": 0, "cacheWrite": 0, "cost": 0.01}}],
          "seats": {"b1": 6},
          "upTo": 8}}]
       """.utf8).write(to: bots.appendingPathComponent("bots.json"))
@@ -481,7 +510,22 @@ func transferMovesTheBotsAndSwitchesTheHostWithNothingTwice() async throws {
   let before = try #require(try await setup.onA.call(ListSavedBots()).chats.first { $0.kind == .main })
   _ = try await setup.onA.call(UpdateSession(sessionID: before.session.id, archived: true, folderID: "f1"))
 
+  // Where the old host had counted the bots' store to goes with them, and is
+  // taken over before the store is in place.
+  // Neither host reads the store again until the move is done.
+  let installed = Mutex<[String?]>([])
+  let released = Mutex<[String]>([])
+  a.server.bots.usage.set(BotsUsageHook.Actions(read: { true }, hold: { "counted to here" },
+                                                release: { released.withLock { $0.append("a") } }, install: { _ in }))
+  let storeFile = b.folder.appendingPathComponent("bots/bots.json").path
+  b.server.bots.usage.set(BotsUsageHook.Actions(read: { true }, hold: { nil }, release: { released.withLock { $0.append("b") } },
+                                                install: { place in
+    #expect(!FileManager.default.fileExists(atPath: storeFile))
+    installed.withLock { $0.append(place) }
+  }))
   _ = try await setup.onA.call(TransferBots(targetMachineID: b.server.machineID))
+  #expect(installed.withLock { $0 } == ["counted to here"])
+  #expect(released.withLock { $0 }.sorted() == ["a", "b"])
 
   // The folder and the files moved, the host switched, and the old copy is gone.
   #expect(FileManager.default.contents(atPath: b.folder.appendingPathComponent("bots/bots.json").path) != nil)
@@ -503,10 +547,6 @@ func transferMovesTheBotsAndSwitchesTheHostWithNothingTwice() async throws {
     let main = try #require(try await client.call(ListSavedBots()).chats.first { $0.kind == .main })
     #expect(try await client.call(SessionItems(sessionID: main.session.id)).count == 2)
     #expect(main.session.archived && main.session.folderID == "f1")
-  }
-  for server in [a, b] {
-    let usage = try await server.server.library.usage(from: .distantPast, to: .distantFuture, periodSeconds: 86400)
-    #expect(usage.totals.requests == 2)
   }
   // The Forum's visual reply is one small item on both, and its HTML came to the new host.
   let digest = Library.digest(of: TransferSetup.visualReplyHTML)

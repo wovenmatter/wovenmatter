@@ -31,11 +31,11 @@ private func fakeAgent() throws -> String {
 }
 
 /// An ACP runtime that runs the fake agent, keeping its native sessions in `store`.
-private func fakeRuntime(store: URL) throws -> ACPRuntime {
+private func fakeRuntime(store: URL, kind: RuntimeKind = .codex) throws -> ACPRuntime {
   let executable = try fakeAgent()
-  return ACPRuntime(kind: .codex, profile: { _ in
-    ACPProfile(kind: .codex, executable: executable, arguments: [], environment: ["FAKE_ACP_STORE": store.path])
-  }, statusCheck: { RuntimeStatus(runtime: .codex, name: "Fake", installed: true) }, installer: {})
+  return ACPRuntime(kind: kind, profile: { _ in
+    ACPProfile(kind: kind, executable: executable, arguments: [], environment: ["FAKE_ACP_STORE": store.path])
+  }, statusCheck: { RuntimeStatus(runtime: kind, name: "Fake", installed: true) }, installer: {})
 }
 
 private struct TestMachine {
@@ -114,8 +114,23 @@ func acpProcessStaysAliveAcrossTurnsAndStreamsToolsAndApprovals() async throws {
   #expect(Set(items.map(\.id)).count == items.count)
 
   // Codex keeps its own history, which is where its usage is counted from.
-  let usage = try await machine.server.library.rows("usage_records", where: "session_id", is: .text(session.id))
-  #expect(usage.isEmpty)
+  let usage = try await machine.server.library.usage(from: .distantPast, to: .distantFuture, periodSeconds: 86_400)
+  #expect(usage.totals == UsageAmounts())
+}
+
+/// A Pi Durable turn's reply reports what it used, which is not saved: its
+/// usage is read from Pi Durable's own store.
+@Test(.timeLimit(.minutes(1)))
+func aPiDurableTurnSavesNoUsageOfItsOwn() async throws {
+  let store = FileManager.default.temporaryDirectory.appendingPathComponent("fake-acp-\(UUID().uuidString)")
+  try FileManager.default.createDirectory(at: store, withIntermediateDirectories: true)
+  let machine = try await TestMachine.start(runtime: try fakeRuntime(store: store, kind: .piDurable))
+  defer { machine.server.stopLater() }
+  let client = try await machine.connect()
+  let session = try await client.call(CreateSession(runtime: .piDurable, title: "Chat"))
+  try await turn(client, session.id, "one")
+  let usage = try await machine.server.library.usage(from: .distantPast, to: .distantFuture, periodSeconds: 86_400)
+  #expect(usage.totals == UsageAmounts())
 }
 
 @Test(.timeLimit(.minutes(1)))
@@ -341,7 +356,7 @@ private final class PickySession: RuntimeSession {
       emit.yield(.text("Working"))
       await runtime.release.wait()
       emit.yield(.messageFinished)
-      emit.yield(.turnFinished(failure: nil, usage: nil))
+      emit.yield(.turnFinished(failure: nil))
     }
   }
 
@@ -425,4 +440,33 @@ func aPermissionTheRuntimeTakesOnlyAtStartRestartsItWithTheNewMode() async throw
     if case .configuration(let configuration) = event, configuration.permission == "ask", runtime.state.withLock({ $0.opened }) == 3 { break }
   }
   #expect(runtime.state.withLock { $0.choices.permission } == "ask")
+}
+
+/// A turn of a runtime that keeps its own history asks, once, for its usage
+/// to be read soon when it ends, also when the session is stopped during
+/// it; one of a runtime that records its own usage does not.
+@Test(.timeLimit(.minutes(1)))
+func aHistoryRuntimesTurnAsksForItsUsageToBeRead() async throws {
+  let store = FileManager.default.temporaryDirectory.appendingPathComponent("fake-acp-\(UUID().uuidString)")
+  try FileManager.default.createDirectory(at: store, withIntermediateDirectories: true)
+  for (runtime, kind, expected) in [(try fakeRuntime(store: store) as any Runtime, RuntimeKind.codex, 1),
+                                    (StandInRuntime() as any Runtime, StandInRuntime.kind, 0)] {
+    let machine = try await TestMachine.start(runtime: runtime)
+    defer { machine.server.stopLater() }
+    let told = Mutex(0)
+    machine.server.sessions.historyTurns.set { told.withLock { $0 += 1 } }
+    let client = try await machine.connect()
+    let session = try await client.call(CreateSession(runtime: kind, title: "Chat"))
+    try await turn(client, session.id, "one")
+    #expect(told.withLock { $0 } == expected)
+    guard kind == .codex else { continue }
+    // A turn stopped while it waits for an approval ends once too.
+    let subscription = try await client.subscribe(SubscribeSession(sessionID: session.id))
+    _ = try await client.call(SendTurn(sessionID: session.id, text: "needs permission"))
+    for try await event in subscription.events { if case .awaiting = event { break } }
+    _ = try await client.call(StopSession(sessionID: session.id))
+    try await client.unsubscribe(subscription.id)
+    try await Task.sleep(for: .milliseconds(200))
+    #expect(told.withLock { $0 } == 2)
+  }
 }

@@ -13,7 +13,12 @@ func registerUsage(_ router: inout Router, library: Library, secrets: Secrets) {
 
   router.on(ReadUsage.self) { request, _ in
     guard request.end > request.start else { throw ProtocolError(.badRequest, "The range ends before it starts.") }
-    return try await library.usage(from: request.start, to: request.end, periodSeconds: request.periodSeconds)
+    var zone: TimeZone?
+    if let identifier = request.timeZone {
+      guard let named = TimeZone(identifier: identifier) else { throw ProtocolError(.badRequest, "Unknown time zone \(identifier).") }
+      zone = named
+    }
+    return try await library.usage(from: request.start, to: request.end, periodSeconds: request.periodSeconds, timeZone: zone)
   }
   router.on(ReadUsageLimits.self) { _, _ in
     await ProviderLimits.read(secrets: secrets)

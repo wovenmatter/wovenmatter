@@ -1,11 +1,11 @@
-import type { AssistantMessage, ToolResultMessage } from "@earendil-works/pi-ai";
+import type { ToolResultMessage } from "@earendil-works/pi-ai";
 import { contentText } from "@earendil-works/pi-ai";
 import { type EntryRecord, ROOT_CONVERSATION_ID } from "@earendil-works/pi-durable";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { Bot, BotManager } from "./bots.ts";
 import { conversationId as toConversationId } from "./ids.ts";
 import type { HostChannel } from "./host/channel.ts";
-import type { MirrorBot, MirrorConversation, MirrorForum, MirrorItem, MirrorSeatUsage } from "./protocol.ts";
+import type { MirrorBot, MirrorConversation, MirrorForum, MirrorItem } from "./protocol.ts";
 import type { ForumStore } from "./storage/forum.ts";
 import type { BotRecord } from "./storage/registry.ts";
 import { hiddenInput, messageText, publishedVisualReply } from "./transcript.ts";
@@ -15,19 +15,6 @@ export const MIRROR_BATCH = 200;
 const FORUM = "forum";
 
 type Built = { readonly item: MirrorItem; readonly entry: number; readonly n: number };
-
-const usageOf = (message: AssistantMessage): MirrorItem["usage"] | undefined => {
-  const usage = message.usage;
-  if (!usage || !(usage.input || usage.output || usage.cacheRead || usage.cacheWrite)) return undefined;
-  return {
-    model: `${message.provider}/${message.model}`,
-    input: usage.input,
-    output: usage.output,
-    cacheRead: usage.cacheRead,
-    cacheWrite: usage.cacheWrite,
-    cost: usage.cost?.total ?? 0,
-  };
-};
 
 /** The agent session a chat message came from (`message_bot`), when not the person. */
 function sender(entry: EntryRecord): MirrorItem["from"] {
@@ -75,8 +62,6 @@ export function mirrorItems(entries: readonly EntryRecord[]): { items: Built[]; 
       }
       if (message.role !== "assistant") continue;
       const createdAt = typeof message.timestamp === "number" ? message.timestamp : Date.now();
-      const usage = usageOf(message);
-      const first = built.length;
       let text = "";
       const flush = () => {
         if (text) built.push({ key: "", conversationId: entry.conversationId, createdAt, kind: "assistant", text });
@@ -124,9 +109,6 @@ export function mirrorItems(entries: readonly EntryRecord[]): { items: Built[]; 
       } else if (message.stopReason === "aborted") {
         built.push({ key: "", conversationId: entry.conversationId, createdAt, kind: "stopped" });
       }
-      // The turn's usage rides on its text, or its first item when it has none.
-      const carrier = built.slice(first).find((item) => item.kind === "assistant") ?? built[first];
-      if (usage && carrier) carrier.usage = usage;
     }
     for (const [n, item] of built.entries()) {
       item.key = n === 0 ? String(entry.id) : `${entry.id}.${n}`;
@@ -356,7 +338,7 @@ export class LibraryMirror {
 
   /**
    * The Forum's rooms and posts above the Forum's checkpoint, with what bots did in their seats
-   * above each bot's seat checkpoint: their tool calls and thinking, and every model turn's usage.
+   * above each bot's seat checkpoint: their tool calls and thinking.
    * Seat work is saved in its room in time order with the posts, so one push carries both, up to a
    * time both reach. Every conversation a bot ever heard a room through is read, so the work of a
    * seat that is gone (its thread deleted, the bot switched out) is still saved.
@@ -389,16 +371,14 @@ export class LibraryMirror {
       const shownPosts = posts.filter((post) => Date.parse(post.createdAt) <= until);
       const upTo = shownPosts.length === posts.length ? (posts.at(-1)?.id ?? from) : (shownPosts.at(-1)?.id ?? from);
       const seatItems: NonNullable<MirrorForum["seatItems"]> = [];
-      const seatUsage: MirrorSeatUsage[] = [];
       const covered: Record<string, number> = {};
       for (const seat of seats) {
         // Work after `until` waits for the next push, and so does every entry after it.
-        const late = [...seat.items.map((built) => built), ...seat.usage].filter((work) => work.createdAt > until);
+        const late = seat.items.filter((work) => work.createdAt > until);
         const through = Math.min(seat.upTo, ...late.map((work) => work.entry - 1));
         for (const built of seat.items) {
           if (built.entry <= through) seatItems.push({ botId: seat.botId, name: seat.name, item: built.item });
         }
-        for (const { entry, ...usage } of seat.usage) if (entry <= through) seatUsage.push(usage);
         if (through > seat.from) covered[seat.botId] = through;
       }
       const moved = upTo > from || Object.keys(covered).length > 0;
@@ -416,7 +396,6 @@ export class LibraryMirror {
           createdAt: Date.parse(post.createdAt),
         })),
         ...(seatItems.length ? { seatItems } : {}),
-        ...(seatUsage.length ? { seatUsage } : {}),
         ...(Object.keys(covered).length ? { seats: covered } : {}),
         upTo,
       });
@@ -428,9 +407,9 @@ export class LibraryMirror {
   }
 
   /**
-   * One bot's seat work above `from`: its tool calls and thinking in rooms that still exist (a
-   * deleted thread keeps only its usage), each model turn's usage, how far that is complete
-   * (`upTo`), and when the first piece left out of a full batch happened (`next`).
+   * One bot's seat work above `from`: its tool calls and thinking in rooms that still exist, how
+   * far that is complete (`upTo`), and when the first piece left out of a full batch happened
+   * (`next`).
    */
   async #seatWork(record: BotRecord, rooms: ReadonlySet<number>, from: number) {
     const conversations = await this.#forum.seatConversations(record.id);
@@ -446,7 +425,6 @@ export class LibraryMirror {
     if (watermark <= from) return undefined;
     let upTo = watermark;
     const items: { item: MirrorItem; entry: number; createdAt: number }[] = [];
-    const usage: (MirrorSeatUsage & { entry: number })[] = [];
     for (const { conversationId, roomId } of conversations) {
       const entries: EntryRecord[] = [];
       for await (const entry of open.ownEntries(conversationId, from)) {
@@ -459,26 +437,12 @@ export class LibraryMirror {
         for (const { item, entry } of built.items) {
           // Posts and visual replies are the Forum's own; what the bot said in its seat is its own.
           if (item.kind === "thinking" || (item.kind === "tool" && item.tool?.name !== "forum_post")) {
-            const { usage: _usage, ...work } = item;
-            items.push({ item: { ...work, conversationId: roomId }, entry, createdAt: item.createdAt });
+            items.push({ item: { ...item, conversationId: roomId }, entry, createdAt: item.createdAt });
           }
-        }
-      }
-      for (const entry of entries) {
-        let n = 0;
-        for (const message of entry.model ?? []) {
-          if (message.role !== "assistant") continue;
-          const used = usageOf(message as AssistantMessage);
-          if (used) {
-            const createdAt = typeof message.timestamp === "number" ? message.timestamp : Date.now();
-            const key = n ? `${entry.id}.${n}` : String(entry.id);
-            usage.push({ botId: record.id, key, roomId, createdAt, usage: used, entry: entry.id });
-          }
-          n += 1;
         }
       }
     }
-    const work = [...items, ...usage].sort((a, b) => a.entry - b.entry).filter((piece) => piece.entry <= upTo);
+    const work = [...items].sort((a, b) => a.entry - b.entry).filter((piece) => piece.entry <= upTo);
     let next: number | undefined;
     if (work.length > MIRROR_BATCH) {
       const cut = work[MIRROR_BATCH] as { entry: number; createdAt: number };
@@ -492,7 +456,6 @@ export class LibraryMirror {
       upTo,
       next,
       items: items.filter((piece) => piece.entry <= upTo).sort((a, b) => a.entry - b.entry),
-      usage: usage.filter((piece) => piece.entry <= upTo),
     };
   }
 

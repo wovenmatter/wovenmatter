@@ -11,6 +11,40 @@ final class FirstMessageHook: Sendable {
   func tell(_ sessionID: String, _ text: String) { action.withLock { $0 }?(sessionID, text) }
 }
 
+/// Told when a turn of a runtime that keeps its own history ends, so its
+/// usage is read soon.
+final class HistoryTurnHook: Sendable {
+  private let action = Mutex<(@Sendable () -> Void)?>(nil)
+
+  func set(_ value: @escaping @Sendable () -> Void) { action.withLock { $0 = value } }
+  func tell() { action.withLock { $0 }?() }
+}
+
+/// How the bots' host keeps their usage counted across a purge and a move:
+/// it reads their store first, hands over where it read it to, and, on the
+/// machine they move to, takes that place over before the store arrives.
+final class BotsUsageHook: Sendable {
+  struct Actions: Sendable {
+    /// Reads the store to its end; whether it could.
+    var read: @Sendable () async -> Bool
+    /// Stops reading the store while the bots move, and says where it was read to.
+    var hold: @Sendable () async -> String?
+    /// Reads the store again once a move has ended, either way.
+    var release: @Sendable () async -> Void
+    /// Takes over the place a move brought, before the store is here.
+    var install: @Sendable (String?) async throws -> Void
+  }
+
+  private let actions = Mutex<Actions?>(nil)
+
+  func set(_ value: Actions) { actions.withLock { $0 = value } }
+  /// With nothing counting usage on this machine there is nothing to read.
+  func read() async -> Bool { await actions.withLock { $0 }?.read() ?? true }
+  func hold() async -> String? { await actions.withLock { $0 }?.hold() }
+  func release() async { await actions.withLock { $0 }?.release() }
+  func install(_ place: String?) async throws { try await actions.withLock { $0 }?.install(place) }
+}
+
 /// Names a new chat from the person's first message, the same way for every
 /// runtime: when `titles.enabled` is set, a throwaway native session of the
 /// title runtime (Codex, with `titles.model` and `titles.thinking`) is asked

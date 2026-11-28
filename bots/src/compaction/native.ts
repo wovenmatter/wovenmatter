@@ -273,6 +273,8 @@ export type CompactRequest = {
   readonly reasoning?: Reasoning;
   readonly fetch?: FetchFunction;
   readonly signal?: AbortSignal;
+  /** Given what the provider says the call used, as soon as it answers, before its answer is checked. */
+  readonly onUsage?: (usage: unknown) => void;
 };
 
 /** Run the model's native compaction. `unsupported` when the route has none. */
@@ -339,6 +341,7 @@ async function claudeAgentCompact(request: CompactRequest): Promise<NativeOutcom
     usage?: unknown;
     botCompaction?: { summary?: string };
   };
+  if (result.usage !== undefined) request.onUsage?.(result.usage);
   const summary = result.botCompaction?.summary;
   if (result.stopReason === "error" || result.stopReason === "aborted" || !summary) {
     throw new NativeCompactionError(
@@ -392,6 +395,7 @@ async function responsesCompact(
   const native = (await readJson(response)) as
     | { output?: unknown; usage?: unknown; model?: unknown }
     | undefined;
+  if (native?.usage !== undefined) request.onUsage?.(native.usage);
   if (!response.ok) {
     if (unsupportedResponse(response.status, native)) {
       return { unsupported: `${route.endpoint}/compact answered ${response.status}` };
@@ -463,15 +467,19 @@ async function* sseEvents(response: Response, signal?: AbortSignal): AsyncGenera
   }
 }
 
+/** How long a Codex compaction that sent an unusable item is given to end and say what it used. */
+export const CODEX_END_WAIT_MS = 30_000;
+
 /**
  * ChatGPT subscription (Codex): append `{type: "compaction_trigger"}` to a streamed Responses turn
  * and collect exactly one `compaction` item, as official Codex and Woven do.
  */
-async function codexCompact(
+export async function codexCompact(
   route: NativeRoute,
   captured: CapturedRequest,
   request: CompactRequest,
   fetch: FetchFunction,
+  endWaitMs = CODEX_END_WAIT_MS,
 ): Promise<NativeOutcome> {
   const payload = captured.payload;
   const input = (payload.input as Json[] | undefined) ?? [];
@@ -494,12 +502,14 @@ async function codexCompact(
   };
   const headers = requestHeaders(captured.headers, "text/event-stream");
   headers.set("OpenAI-Beta", "responses=experimental");
+  // Closed from this side when the response is no longer waited for.
+  const stream = new AbortController();
   const response = await fetch(route.endpoint, {
     method: "POST",
     headers,
     body: JSON.stringify(body),
     redirect: "error",
-    ...(request.signal ? { signal: request.signal } : {}),
+    signal: request.signal ? AbortSignal.any([request.signal, stream.signal]) : stream.signal,
   });
   if (!response.ok) {
     const native = await readJson(response);
@@ -516,35 +526,63 @@ async function codexCompact(
   let count = 0;
   let completed: Json | undefined;
   let emitted = false;
-  for await (const event of sseEvents(response, request.signal)) {
-    const type = event.type;
-    if (type === "error" || type === "response.failed" || type === "response.incomplete") {
-      const failure = (event.response as Json | undefined) ?? event;
-      const unsupported =
-        !emitted && unsupportedResponse(400, failure.error ? failure : { error: failure }, false);
-      if (unsupported) return { unsupported: "Codex compaction is not supported for this model" };
-      throw new NativeCompactionError("provider", "Native Codex compaction did not complete.");
-    }
-    if (typeof type === "string" && type.startsWith("response.output")) emitted = true;
-    if (type === "response.output_item.done") {
-      const candidate = event.item as Json | undefined;
-      if (
-        candidate &&
-        (candidate.type === "compaction" || candidate.type === "compaction_summary")
-      ) {
-        count++;
-        if (typeof candidate.encrypted_content !== "string" || !candidate.encrypted_content) {
-          throw new NativeCompactionError(
-            "invalid-response",
-            "Codex compaction item has no content.",
-          );
-        }
-        item = candidate;
+  let used = false;
+  let invalid = false;
+  const events = sseEvents(response, request.signal);
+  let late: Promise<"late"> | undefined;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    for (;;) {
+      const next = events.next();
+      const step = late ? await Promise.race([next, late]) : await next;
+      if (step === "late") {
+        next.catch(() => {});
+        break;
       }
-    } else if (type === "response.completed") {
-      completed = (event.response as Json | undefined) ?? {};
-      break;
+      if (step.done) break;
+      const event = step.value;
+      const type = event.type;
+      // The first usage the response reports (a created response has none yet), before
+      // anything in it is checked.
+      const reported = (event.response as Json | undefined)?.usage;
+      if (!used && reported !== undefined && reported !== null) {
+        used = true;
+        request.onUsage?.(reported);
+      }
+      if (type === "error" || type === "response.failed" || type === "response.incomplete") {
+        const failure = (event.response as Json | undefined) ?? event;
+        const unsupported =
+          !emitted && unsupportedResponse(400, failure.error ? failure : { error: failure }, false);
+        if (unsupported) return { unsupported: "Codex compaction is not supported for this model" };
+        throw new NativeCompactionError("provider", "Native Codex compaction did not complete.");
+      }
+      if (typeof type === "string" && type.startsWith("response.output")) emitted = true;
+      if (type === "response.output_item.done") {
+        const candidate = event.item as Json | undefined;
+        if (
+          candidate &&
+          (candidate.type === "compaction" || candidate.type === "compaction_summary")
+        ) {
+          count++;
+          // Refused once the response has ended, or has had `endWaitMs` to, so its usage is read first.
+          if (typeof candidate.encrypted_content !== "string" || !candidate.encrypted_content) {
+            invalid = true;
+            late ??= new Promise((resolve) => {
+              timer = setTimeout(() => resolve("late"), endWaitMs);
+            });
+          } else item = candidate;
+        }
+      } else if (type === "response.completed") {
+        completed = (event.response as Json | undefined) ?? {};
+        break;
+      }
     }
+  } finally {
+    clearTimeout(timer);
+    stream.abort();
+  }
+  if (invalid) {
+    throw new NativeCompactionError("invalid-response", "Codex compaction item has no content.");
   }
   if (!completed || count !== 1 || !item) {
     throw new NativeCompactionError(
@@ -600,6 +638,7 @@ async function anthropicCompact(
   const native = (await readJson(response)) as
     | { content?: unknown; stop_reason?: unknown; usage?: unknown }
     | undefined;
+  if (native?.usage !== undefined) request.onUsage?.(native.usage);
   if (!response.ok) {
     if (unsupportedResponse(response.status, native)) {
       return { unsupported: `Anthropic compaction answered ${response.status}` };

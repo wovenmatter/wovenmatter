@@ -41,7 +41,7 @@ import WovenProtocol
     switch event {
     case .text(let delta): text += delta
     case .tool(_, let call, true): finishedCalls.append(call)
-    case .turnFinished(let failure, _): finished = (failure, true)
+    case .turnFinished(let failure): finished = (failure, true)
     default: break
     }
   }
@@ -285,7 +285,7 @@ private func scriptCalls(_ events: [RuntimeEvent]) -> (open: [ToolCall], finishe
     #"{"type":"session.execution.succeeded","data":{"sessionID":"s"}}"#,
   ])
   #expect(events.compactMap { if case .tool(let id, _, true) = $0 { id } else { nil } } == ["c1"])
-  #expect(events.compactMap { if case .turnFinished(let failure, _) = $0 { failure ?? "ok" } else { nil } } == ["ok", "ok"])
+  #expect(events.compactMap { if case .turnFinished(let failure) = $0 { failure ?? "ok" } else { nil } } == ["ok", "ok"])
   #expect(events.contains { if case .text(let text) = $0 { text == "Done." } else { false } })
 
   // In a turn the session sent and knows is running, such a result is kept.
@@ -842,7 +842,7 @@ private func schemaProblems(_ value: JSONValue, _ schema: JSONValue, at path: St
   // which is no failure; "shutdown" with no dismissal is its server stopping.
   func ending(_ frames: [String]) -> String?? {
     project(frames + [#"{"type":"session.execution.interrupted","data":{"sessionID":"s","reason":"shutdown"}}"#])
-      .compactMap { if case .turnFinished(let failure, _) = $0 { failure } else { nil } }.first
+      .compactMap { if case .turnFinished(let failure) = $0 { failure } else { nil } }.first
   }
   let start = [
     #"{"type":"session.step.started","data":{"sessionID":"s","assistantMessageID":"m1"}}"#,

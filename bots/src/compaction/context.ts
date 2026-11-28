@@ -13,6 +13,7 @@ import {
   type Registry,
 } from "@earendil-works/pi-durable";
 import { isReasoning, type Reasoning } from "../config.ts";
+import { type ModelCallUsage, providerUsage, replyUsage } from "../usage.ts";
 import {
   applyWindow,
   compactNative,
@@ -68,6 +69,8 @@ export const NativeContextDoc = defineDoc<NativeContextState & JsonObject>({
 export type CompactionOptions = {
   /** `"off"` disables provider-native compaction; Pi Durable's summarizer then always runs. */
   readonly native?: "auto" | "off";
+  /** Given each compaction model call's usage, with the conversation it compacted. */
+  readonly onUsage?: (conversationId: number, usage: ModelCallUsage) => void;
   /** Fetch for native compaction and generation requests; tests inject a fake. */
   readonly fetch?: FetchFunction;
   readonly onReport?: (error: unknown, info: unknown) => void;
@@ -235,6 +238,14 @@ export class NativeCompaction {
     return [...prefix, ...withoutSystem(own)];
   }
 
+  /** Saves what one native compaction call used, for `conversationId`, in the shape its provider reports. */
+  #usage(conversationId: number, model: Model<Api>): (usage: unknown) => void {
+    return (usage) => {
+      const used = providerUsage(usage, model.provider, model.id, Date.now());
+      if (used) this.#options.onUsage?.(conversationId, used);
+    };
+  }
+
   /** The portable summary, at the conversation's own reasoning level. */
   async #portable(
     conversation: Conversation,
@@ -270,6 +281,7 @@ export class NativeCompaction {
       .flatMap((part) => (part.type === "text" ? [part.text] : []))
       .join("\n")
       .trim();
+    this.#options.onUsage?.(conversation.id as unknown as number, replyUsage(reply));
     if (reply.stopReason !== "stop" || !text) {
       throw new Error(`portable compaction failed: ${reply.errorMessage ?? reply.stopReason}`);
     }
@@ -277,16 +289,16 @@ export class NativeCompaction {
   }
 
   /** `pi.compaction` → `beforeCompact`. */
-  readonly beforeCompact = async (
+  readonly beforeCompact: NonNullable<import("@earendil-works/pi-durable").CompactionHooks["beforeCompact"]> = async (
     compaction: Compaction,
     api: HookApi,
     ctx: HookContext,
-  ): Promise<{ decline: true } | { summary: string } | undefined> => {
+  ) => {
     const saved = (await api.snapshot(NativeContextDoc, api.conversationId, ctx)) ?? {
       covered: [],
     };
     // The window and its receipt commit together, so a retried task completes without recompacting.
-    if (saved.receipt?.taskId === (api.taskId as unknown as number)) return { decline: true };
+    if (saved.receipt?.taskId === (api.taskId as unknown as number)) return { kind: "decline" };
     const model = await this.#model(api, ctx);
     if (!model) return undefined;
     const conversation = await this.harness.conversation(api.conversationId);
@@ -324,6 +336,7 @@ export class NativeCompaction {
           : delta;
       try {
         const outcome = await compactNative({
+          onUsage: this.#usage(api.conversationId as unknown as number, model),
           models: this.models(),
           model,
           messages: [...(system ? [system] : []), ...covered],
@@ -339,7 +352,7 @@ export class NativeCompaction {
             route: outcome.route,
             window: outcome.window,
           });
-          return { decline: true };
+          return { kind: "decline" };
         }
         this.#options.onReport?.(new Error(outcome.unsupported), {
           kind: "native-compaction-unsupported",
@@ -369,7 +382,7 @@ export class NativeCompaction {
       const current = await tx.doc(NativeContextDoc, conversation.id);
       delete current.active;
     }, ctx);
-    return { summary };
+    return { kind: "summary", summary };
   };
 
   async #commit(
@@ -471,6 +484,7 @@ export class NativeCompaction {
     let next: ActiveWindow | undefined;
     if (this.#native(model)) {
       const outcome = await compactNative({
+        onUsage: this.#usage(conversation.id as unknown as number, model),
         models: this.models(),
         model,
         messages,

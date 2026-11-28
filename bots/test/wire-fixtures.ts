@@ -405,7 +405,6 @@ const hostCalls = {
           createdAt: MS,
           kind: "assistant",
           text: "Looking at the log.",
-          usage: { model: "openai-codex/gpt-6-sol", input: 1200, output: 80, cacheRead: 900, cacheWrite: 0, cost: 0.0021 },
         },
         {
           key: "14.1",
@@ -453,15 +452,6 @@ const hostCalls = {
             kind: "tool",
             tool: { name: "bash", input: '{"command":"npm test"}', output: "ok", failed: false },
           },
-        },
-      ],
-      seatUsage: [
-        {
-          botId: ADA,
-          key: "21",
-          roomId: 1,
-          createdAt: MS,
-          usage: { model: "openai-codex/gpt-6-sol", input: 300, output: 20, cacheRead: 0, cacheWrite: 0, cost: 0.0004 },
         },
       ],
       seats: { [ADA]: 21 },

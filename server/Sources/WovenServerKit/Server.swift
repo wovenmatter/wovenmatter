@@ -76,7 +76,7 @@ public final class WovenServer: Sendable {
   var toolKeysForTests: ToolKeys { endpoint.keys }
   /// This machine's permanent identifier.
   public var machineID: String { library.machineID }
-  private let sessions: SessionManager
+  let sessions: SessionManager
   private let peers: PeerSync
   private let secrets: Secrets
   private let github: GitHub
@@ -153,7 +153,18 @@ public final class WovenServer: Sendable {
     registerServerControl(&routes, library: library, sessions: sessions, peers: peers, tailnet: options.tailnet,
                           dataFolder: options.dataFolder, instance: options.instance, install: install)
     let keepAwake = KeepAwake(library: library)
-    let usage = options.harnessHome.map { UsageScanner(library: library, home: $0) }
+    let stores: [(kind: PiStoreKind, url: URL)] = [
+      (.piDurable, options.dataFolder.appendingPathComponent("pi-durable/pi-durable.sqlite")),
+      (.bots, options.dataFolder.appendingPathComponent("bots/bots.sqlite")),
+    ]
+    let usage = options.harnessHome.map {
+      UsageScanner(library: library, home: $0, environment: ProcessInfo.processInfo.environment, stores: stores)
+    }
+    if let usage {
+      sessions.historyTurns.set { Task { await usage.nudge() } }
+      bots.usage.set(BotsUsageHook.Actions(read: { await usage.readStores(.bots) }, hold: { await usage.holdBots(limit: .seconds(30)) },
+                                           release: { await usage.releaseBots() }, install: { try await usage.installBotsPlace($0) }))
+    }
     let analytics = Analytics(library: library,
                               delivery: options.analyticsDelivery ?? (options.sendsAnalytics ? PostHogDelivery() : nil),
                               appVersion: options.appVersion, settled: { await peers.firstRoundDone })
@@ -448,7 +459,7 @@ private func makeRouter(library: Library, sessions: SessionManager, peers: PeerS
       for await changed in changes {
         let tables = (try? await library.tablesChanged(after: last)) ?? Schema.synced.map(\.name)
         last = changed
-        continuation.yield(LibraryEvent(changed: changed, tables: tables))
+        deliver(LibraryEvent(changed: changed, tables: tables), to: continuation)
       }
       continuation.finish()
     }
@@ -478,4 +489,14 @@ private func makeRouter(library: Library, sessions: SessionManager, peers: PeerS
     throw ProtocolError(.notFound, "No content \(request.digest).")
   }
   return router
+}
+
+/// Hands a library event to a subscriber that holds only the newest one. An
+/// event that replaces one not yet taken carries that one's tables too, so
+/// no change is lost to the subscriber.
+func deliver(_ event: LibraryEvent, to continuation: AsyncStream<LibraryEvent>.Continuation) {
+  guard case .dropped(let replaced) = continuation.yield(event), replaced != event else { return }
+  var merged = event
+  merged.tables = Array(Set(replaced.tables).union(event.tables)).sorted()
+  continuation.yield(merged)
 }

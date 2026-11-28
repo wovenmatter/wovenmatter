@@ -303,26 +303,30 @@ public enum Schema {
       .text("author"),
       .integer("created_at", 0),
     ], parents: [Parent(column: "session_id", table: "sessions")], indexes: [["session_id", "sequence"]]),
-    // Usage of every harness on the machine that wrote it. A harness that
-    // keeps its own history (Codex, Claude Code, Grok Build, OpenCode, the Pi
-    // CLI) is counted only from that history, one row per session, model and
-    // hour; Pi Durable writes one row per turn and bots one per model turn.
-    Table("usage_records", .appendOnly, [
+    // Usage read from each runtime's own record (Codex, Claude Code, Grok
+    // Build, OpenCode, the Pi CLI, Pi Durable, bots): one row per machine, harness session,
+    // model, hour and whether the history says Woven Matter made it, holding
+    // the sums of that machine's `usage_responses` in the group. Only the
+    // owning machine writes its rows, and rewrites one whenever its sums
+    // change; a row is never deleted.
+    Table("usage_hours", .newestWins, [
       .text("machine_id", ""),
       // The Woven Matter session, when the usage was one.
       .text("session_id"),
-      // The harness's own session identifier, for usage read from its history.
-      .text("native_session"),
-      // Made inside Woven Matter.
-      .integer("woven", 1),
+      // The harness's own session identifier.
+      .text("native_session", ""),
+      // Made inside Woven Matter: the history says so, or the session is one.
+      .integer("woven", 0),
       .text("runtime", ""),
       .text("model", ""),
+      // The start of the hour, in ms.
+      .integer("hour", 0),
       .integer("input_tokens", 0),
       .integer("output_tokens", 0),
       .integer("cache_read_tokens", 0),
       .integer("cache_write_tokens", 0),
       .real("cost", 0),
-      .integer("requests", 1),
+      .integer("requests", 0),
       // The newest response the row counts.
       .integer("recorded_at", 0),
     ], indexes: [["recorded_at"]]),
@@ -359,7 +363,7 @@ public enum Schema {
       // A turn is running. Still set at start, the server stopped mid-turn.
       .integer("turn_running", 0),
       .integer("updated_at", 0),
-    ]),
+    ], indexes: [["runtime", "handle"]]),
     // How far the bots runtime's finished entries are saved here: "bot:<id>"
     // for a bot's conversations, "forum" for the Forum. Kept by the library,
     // not the bots' folder, so bots moved to another machine save their
@@ -370,43 +374,46 @@ public enum Schema {
     ]),
     // How far this machine's harness histories have been read, by a digest
     // of the file's path (paths never enter the library): the bytes read, the
-    // file's size, change time and identity when read, and the reader's
-    // state at that point as JSON. `interrupted` counts the reads begun and
-    // never finished in a row: the process ended while it was open.
+    // file's size and change time when read, its identity (a digest of its
+    // first line), a digest of the bytes just before the position (empty:
+    // the position is not trusted and the history is read from the start),
+    // and the reader's state at that point as JSON. `interrupted` counts the
+    // reads begun and never finished in a row: the process ended while it
+    // was open. `passed_over` is when a history that could not be read was
+    // last set aside, in ms.
     Table("usage_sources", .local, [
       .key("id"),
       .integer("offset", 0),
       .integer("size", 0),
       .integer("modified", 0),
       .text("identity", ""),
+      .text("boundary", ""),
       .text("state", ""),
       .integer("interrupted", 0),
+      .integer("passed_over", 0),
     ]),
-    // Usage read from the histories for an hour not yet over, summed per
-    // harness session and model. A row moves to `usage_records` once its hour
-    // has passed; the Usage page reads both.
-    Table("usage_pending", .local, [
+    // Every model response read from this machine's harness histories, by
+    // the harness's own identifier, kept for good so a response read again
+    // from any copy of any history counts once. `usage_hours` is summed
+    // from it.
+    Table("usage_responses", .local, [
       .key("id"),
       .text("runtime", ""),
       .text("native_session", ""),
+      // The history itself says Woven Matter made it.
       .integer("woven", 0),
       .text("model", ""),
-      .integer("hour", 0),
+      .integer("at", 0),
       .integer("input_tokens", 0),
       .integer("output_tokens", 0),
       .integer("cache_read_tokens", 0),
       .integer("cache_write_tokens", 0),
       .real("cost", 0),
-      .integer("requests", 0),
-      .integer("recorded_at", 0),
-    ]),
-    // Responses already counted, by the harness's own identifier, so a copy
-    // in a forked or resumed session's file or a file read again counts
-    // once. Forgotten after 60 days.
-    Table("usage_seen", .local, [
-      .key("id"),
-      .integer("seen_at", 0),
-    ], indexes: [["seen_at"]]),
+      .integer("requests", 1),
+      // What the history shows here is a response counted under another
+      // identifier: this one counts nothing.
+      .integer("restated", 0),
+    ], indexes: [["runtime", "native_session", "model", "woven", "at"]]),
     // What this machine's scheduler has fired of each entry it owns.
     // `stamp` is the entry's stamp `next_fire_at` was worked out from.
     Table("schedule_state", .local, [

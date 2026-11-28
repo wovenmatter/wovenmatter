@@ -369,13 +369,23 @@ extension Library {
     }
   }
 
+  /// Records the runtime's handle for a session. The usage hours of the
+  /// harness session it names, and of one it named before, are published
+  /// again under the session they now belong to.
   public func setNativeSession(_ sessionID: String, runtime: RuntimeKind, handle: String) async throws {
     try await write { writer in
+      let before = try writer.db.query("SELECT runtime, handle FROM native_sessions WHERE session_id = ?", [.text(sessionID)]).first
       try writer.db.run("""
         INSERT INTO native_sessions (session_id, runtime, handle, gone, updated_at) VALUES (?, ?, ?, 0, ?)
         ON CONFLICT(session_id) DO UPDATE SET runtime = excluded.runtime, handle = excluded.handle, gone = 0,
           updated_at = excluded.updated_at
         """, [.text(sessionID), .text(runtime.rawValue), .text(handle), .integer(Writer.now())])
+      guard before?.text("runtime") != runtime.rawValue || before?.text("handle") != handle else { return }
+      try Self.publishSession(runtime: runtime, nativeSession: handle, writer)
+      if let before {
+        try Self.publishSession(runtime: RuntimeKind(rawValue: before.text("runtime") ?? ""),
+                                nativeSession: before.text("handle") ?? "", writer)
+      }
     }
   }
 
@@ -466,22 +476,6 @@ extension Library {
   private static func setting(_ row: Row) throws -> Setting {
     Setting(key: row.text("id") ?? "",
             value: try Wire.decoder.decode(JSONValue.self, from: Data((row.text("value") ?? "null").utf8)))
-  }
-}
-
-// MARK: Usage
-
-extension Library {
-  /// Writes one usage record for a finished turn of a session on this
-  /// machine, for a runtime without a history of its own (Pi Durable).
-  public func recordUsage(sessionID: String?, runtime: RuntimeKind, model: String, input: Int64, output: Int64,
-                          cacheRead: Int64, cacheWrite: Int64) async throws {
-    try await put("usage_records", id: UUID().uuidString.lowercased(), [
-      "machine_id": .text(machineID), "session_id": sessionID.map(SQLValue.text) ?? .null, "runtime": .text(runtime.rawValue),
-      "model": .text(model), "input_tokens": .integer(input), "output_tokens": .integer(output),
-      "cache_read_tokens": .integer(cacheRead), "cache_write_tokens": .integer(cacheWrite),
-      "recorded_at": .integer(Writer.now()),
-    ])
   }
 }
 

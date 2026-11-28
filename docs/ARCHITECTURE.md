@@ -167,12 +167,13 @@ fetched by digest when needed.
 
 ### What syncs how
 
-- **Append-only**: session items, usage records, dictation history. Written
+- **Append-only**: session items, dictation history. Written
   once by the owning machine, never edited.
 - **Newest write wins**: machines, sessions (title, folder, archived), folders,
-  settings, schedules, sealed secrets, database descriptions. Only the owning
-  machine writes its `schedules` rows; a request about another machine's entry
-  is refused with the owner's name, so the caller can send it there.
+  settings, schedules, sealed secrets, database descriptions, usage hours.
+  Only the owning machine writes its `schedules` and `usage_hours` rows; a
+  request about another machine's schedule entry is refused with the owner's
+  name, so the caller can send it there.
 - **Newest write wins, loser kept**: notes, pages, sheets and apps. Each write records
   the latest write it has seen from each machine. When a received write has
   not seen everything the local one has, the two were edited apart: the newer
@@ -180,7 +181,7 @@ fetched by digest when needed.
   No separate copy appears.
 - **Never syncs**: sync cursors, this machine's identifier, live state, native
   session handles' process state, provider sign-ins, how far the harness
-  histories have been read.
+  histories have been read, the responses read from them.
 
 Rows that belong to a machine (sessions, folders, databases, schedules) carry
 that machine's identifier in a column. Ownership is never held in a side table.
@@ -273,49 +274,98 @@ next message resumes it.
 
 ## Usage
 
-Each server counts the usage of every harness on its own machine, whether the
-work was done in Woven Matter or not, and writes it to the library as usage
-records, which sync like any other append-only rows. The Usage page on any
-machine reads its own library and so shows every machine.
+Each server counts the usage of every runtime on its own machine, whether the
+work was done in Woven Matter or not, from the runtime's own record there,
+and writes it to the library, where it syncs like any other rows. The Usage
+page on any machine reads its own library and so shows every machine.
 
 - **Codex, Claude Code, Grok Build, OpenCode and the Pi CLI** are counted only
-  from their own history: Codex's rollouts (`~/.codex/sessions` and
+  from their own history, wherever they ran (in Woven Matter, a desktop app,
+  an IDE or a terminal): Codex's rollouts (`~/.codex/sessions` and
   `archived_sessions`, compressed ones too), Claude Code's transcripts
-  (`~/.claude/projects`), Grok Build's `updates.jsonl` (`~/.grok/sessions`),
-  OpenCode's database (`~/.local/share/opencode/opencode.db`) and the Pi CLI's
-  sessions (`~/.pi/agent/sessions`). A turn Woven Matter runs with one of them
-  writes no usage of its own; its usage is in that history and is counted from
-  there, once. Woven Matter's own record of which native session each of its
-  sessions is (`native_sessions`) names the session and marks it as made in
-  Woven Matter.
-- **Pi Durable** writes one record per turn, and **bots** one per model turn,
-  in their chats and in the Forum alike, from what the runtime reports. Nothing
-  else counts them.
+  (`~/.claude/projects`, `~/.config/claude/projects`, and on a Mac those the
+  Claude app keeps for its own sessions), Grok Build's `updates.jsonl`
+  (`~/.grok/sessions`), OpenCode's database
+  (`~/.local/share/opencode/opencode.db`) and the Pi CLI's sessions
+  (`~/.pi/agent/sessions`). A `CODEX_HOME`, `CLAUDE_CONFIG_DIR` or
+  `XDG_DATA_HOME` in the server's environment adds the home it names. A turn
+  Woven Matter runs with one of them writes no usage of its own; its usage is
+  in that history and is counted from there, once. Woven Matter's own record
+  of which native session each of its sessions is (`native_sessions`) names
+  the session and marks it as made in Woven Matter.
+- **Pi Durable** and the **bots** are counted from their own stores, which
+  keep every conversation for good: Pi Durable's `pi-durable/pi-durable.sqlite`
+  and, on the bots' host, `bots/bots.sqlite`, both in the server's data
+  folder. Every assistant response in them counts, a sub-agent's under the
+  conversation that ran it, with what a conversation's own usage sums hold
+  beyond its responses, tokens and cost, as one more, dated at its newest
+  compaction. Pi Durable saves each of its compaction summary calls in its
+  store as it returns, counted at its own time, and what the sums hold beyond
+  those too. The bots keep each call they make outside a conversation (thread
+  titles, memory extraction, compaction) in their store too, as the provider
+  answers. A bot's chat is filed under its chat on the machine that reads it,
+  a seat's work under its Forum room, and the Forum's own titles under the
+  room. A store is read a page at a time, each from the place last saved.
+  Bots that move to another machine take their store with them and the place
+  their old host had counted it to; neither host reads the store while they
+  move, and the new host counts what lies after that place once the move is
+  done. A purge reads the store first, and is refused when it cannot. A turn
+  writes no usage of its own.
 - Only counts leave a history: the harness, model, time, tokens by kind, the
-  cost when the harness records one, and the harness's own session
-  identifier. No text, path or credential is read into the library.
-- The server reads each history on from where it stopped (a digest of the
-  path keys the place, in a local table), at start and every two minutes. A
-  file is the same history while its first line is, so one copied back,
-  restored or rewritten whole is read on, not again. A copy of another
-  session's responses in a resumed or forked session is recognised by the
-  session it names and left out. Beyond that, each response is remembered by
-  the harness's own identifier for 60 days, so a file whose first line
-  changed is read again from the start without counting what was seen in
-  that time.
+  model calls, the cost when the harness records one, and the harness's own
+  session identifier. No text, path or credential is read into the library.
+- Every response read is kept for good in a local table, `usage_responses`,
+  by the harness's own identifier, so a response read again from any copy of
+  any history counts once. It takes the counts of its fullest observation (a
+  streamed message's final line) and the session, model and time of its
+  earliest (a copy is made after what it copies), in whatever order the
+  histories are read. A Codex response that older releases record only as a
+  `token_count` event is one when the thread's running total moved and the
+  event does not restate a `token_usage_record` or, as a file's first total,
+  the usage of the thread it was forked, resumed or spawned from; it is
+  known by a digest of its counts and the running total, which a forked
+  thread's copy keeps although the copy is stamped with the fork's time,
+  and, for a thread's first response, whose total is its own counts, of the
+  turn its rollout names too. A `token_count` restates a record only within
+  the record's turn.
+- The synced rows, `usage_hours`, are worked out from that table: one per
+  machine, harness session, model, hour and whether the history says Woven
+  Matter made it, holding the sums. Each row a save changes is written again
+  in place, in the same transaction, by the owning machine only; a row is
+  never deleted. So reading the same history again, in any order, gives the
+  same rows.
+- The server reads each history on from where it stopped, at start and
+  every ten minutes, and soon after a Woven Matter turn with a harness that
+  keeps its own history ends: at most once a minute for such turns, after
+  the read in progress if there is one. Its place is kept in a local table, keyed by a digest of
+  the path, with a digest of its first line and of the bytes just before the
+  place; a history whose first line or those bytes changed is read again
+  from its start, which counts nothing twice. A file is read to its end a
+  chunk at a time, each chunk saved with its place, and a compressed one is
+  decompressed as a stream read a piece at a time. OpenCode's place is the
+  last message read, which must still be in the database; each read takes
+  in the hour before it again.
+- A pass of about twenty seconds first reads on the histories that grew,
+  for at most half of it while others wait, then those not yet read to
+  their end, newest first, for the rest; while some are left the next pass
+  follows at once, the unfinished first. A machine's first read so shows
+  the last day first, then the week, the month, three months and the rest,
+  and the server logs each of those once as it is reached.
 - Every history may have been written by anyone. A line that is not what its
   harness writes is skipped; a file that cannot be read (it fails to
   decompress, or the database is locked or corrupt) is passed over until it
-  changes. A read is counted in the history's row before it begins and the
-  count cleared when it ends, so one open when the server dies is read again
-  at the next start, and one open at two such ends in a row is passed over
-  until it changes; a normal stop ends the read in progress, or OpenCode's
-  page, first and counts nothing. Counts are held below a trillion per response,
-  and decompression stops at 256 MiB per file.
-- What it reads is summed per harness session, model and hour in a local
-  table. When the hour is over, each sum becomes one synced record, so a year
-  of heavy use stays a few thousand rows per machine. The page includes this
-  machine's hour in progress.
+  changes or a day has passed, keeping what was saved from it. A read is
+  counted in the history's row before it begins and the count cleared when it
+  ends, so one open when the server dies is read again at the next start, and
+  one open at two such ends in a row is passed over the same way; a normal
+  stop ends the read after the chunk, or OpenCode's page, in progress and
+  counts nothing. Counts are held below a trillion per response, and a time
+  outside the years 2000 to 2100 is no time.
+- Usage syncs as these per-hour sums, so a range that begins or ends inside
+  an hour takes or leaves that hour's sum by the time of its newest
+  response. The page asks for daily usage by the days of its own time zone;
+  those days are exact for zones whose offset from UTC is a whole number of
+  hours.
 
 ## Usage statistics
 
@@ -434,12 +484,12 @@ transfer.
 - A bot's items are a session's kinds, saved through the same writer: messages
   (one from another session under its name), the model's thinking, tool calls
   with their input and output under the same cap, visual replies, failures and
-  stops as notices, and one usage record per model turn.
+  stops as notices. Their usage is read from the bots' store.
 - A bot hears the Forum and each thread it is in through a seat: a
   conversation of its own. Its posts, and its tool calls and thinking there,
   are saved in the room under its name, in time order; what it says in its
-  seat without posting stays private. Each of a seat's model turns is recorded
-  as usage under the room, also after the seat is gone (its thread deleted,
+  seat without posting stays private. Each of a seat's model turns counts as
+  usage under the room, also after the seat is gone (its thread deleted,
   the bot switched out). A Forum post carries the person's open notes to the
   bots as a chat message does, and Stop in a room stops the bots working there
   only; Pause stops every room.

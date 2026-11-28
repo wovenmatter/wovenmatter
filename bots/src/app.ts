@@ -297,6 +297,10 @@ export async function startRuntime(
             self.reportLimit(bot.id, conversationId, model, limit),
           fallbackNote: (conversationId) => self.fallbackNote(bot.id, conversationId),
           memory: async () => memorySection((await self.registry.memory(bot.id)).facts),
+          recordUsage: (conversationId, purpose, usage) =>
+            void self.registry
+              .recordUsage(bot.id, conversationId, purpose, usage)
+              .catch((error: unknown) => log(`bot ${bot.id}: usage not saved: ${String(error)}`)),
         });
       },
       onBotOpened: (bot) => {
@@ -408,6 +412,9 @@ export async function startRuntime(
         await mirror?.close();
         await memory?.close();
         await opened.close();
+        // Every model call's usage is saved before the store closes, the Forum's titles' too.
+        await opened.registry.usageSaved();
+        await registry.usageSaved();
         availability.close();
         await availability.flushed();
         if (env?.shutdown) await env.shutdown();

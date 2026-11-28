@@ -97,15 +97,23 @@ export class TitleGenerator {
     return typeof model === "function" ? model() : model;
   }
 
-  /** Title `firstPrompt` with the global title model (`[models.titles]`). */
-  generate(firstPrompt: string, signal?: AbortSignal): Promise<string> {
+  /**
+   * Title `firstPrompt` with the global title model (`[models.titles]`). `onReply` is given the
+   * model's reply, also one that failed, so its usage can be saved.
+   */
+  generate(firstPrompt: string, signal?: AbortSignal, onReply?: (reply: AssistantMessage) => void): Promise<string> {
     if (signal?.aborted) return Promise.reject(new TitleError("title request aborted"));
     const model = this.model;
     if (!model) return Promise.reject(new TitleError("no title model: choose a main model first"));
-    return this.#generateOn(model, firstPrompt, signal);
+    return this.#generateOn(model, firstPrompt, signal, onReply);
   }
 
-  async #generateOn(ref: ModelRef, firstPrompt: string, signal?: AbortSignal): Promise<string> {
+  async #generateOn(
+    ref: ModelRef,
+    firstPrompt: string,
+    signal?: AbortSignal,
+    onReply?: (reply: AssistantMessage) => void,
+  ): Promise<string> {
     const source = this.#options.models;
     const models = typeof source === "function" ? source() : source;
     const { provider, modelId } = ref;
@@ -130,6 +138,7 @@ export class TitleGenerator {
         },
       )
       .result();
+    onReply?.(reply);
     if (reply.stopReason === "error" || reply.stopReason === "aborted") {
       throw new TitleError(reply.errorMessage ?? `title request ${reply.stopReason}`);
     }

@@ -23,6 +23,7 @@ import {
   type ThreadRecord,
 } from "./storage/registry.ts";
 import type { TitleGenerator } from "./titles.ts";
+import { replyUsage } from "./usage.ts";
 import { displayEntry } from "./transcript.ts";
 
 const ctx = BACKGROUND_CONTEXT;
@@ -457,7 +458,9 @@ export class ThreadTitles {
     const run = (async () => {
       const thread = await this.#registry.getThread(botId, conversationId);
       if (!thread || thread.title) return;
-      const title = await this.#generator.generate(firstPrompt, this.#abort.signal);
+      const title = await this.#generator.generate(firstPrompt, this.#abort.signal, (reply) => {
+        void this.#registry.recordUsage(botId, conversationId, "title", replyUsage(reply)).catch(this.#onReport);
+      });
       if (await this.#registry.setThreadTitleIfUntitled(botId, conversationId, title)) {
         this.#onTitled(botId, conversationId);
       }

@@ -1,9 +1,11 @@
 import type { Api, AssistantMessage, Model, Models } from "@earendil-works/pi-ai";
+import { ROOT_CONVERSATION_ID } from "@earendil-works/pi-durable";
 import type { BotManager } from "./bots.ts";
 import { parseModelRef, type Reasoning } from "./config.ts";
 import { type CronSchedule, parseCron, zonedParts } from "./cron.ts";
 import { DELIVERY_KIND } from "./storage/forum.ts";
 import { displayEntry } from "./transcript.ts";
+import { replyUsage } from "./usage.ts";
 
 /** Memory extraction's reasoning level: background work, on whichever model extracts. */
 const MEMORY_REASONING: Reasoning = "medium";
@@ -330,6 +332,10 @@ export class MemoryExtractor {
             },
           )
           .result();
+        // The bot's own extraction: saved with its main conversation. A failed save does not fail it.
+        await this.#options.manager.registry
+          .recordUsage(botId, ROOT_CONVERSATION_ID as unknown as number, "memory", replyUsage(reply))
+          .catch(() => {});
         if (reply.stopReason === "error" || reply.stopReason === "aborted") {
           throw new Error(reply.errorMessage ?? `request ${reply.stopReason}`);
         }

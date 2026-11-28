@@ -32,6 +32,7 @@ import {
 } from "./storage/forum.ts";
 import type { BotRecord, BotRegistry } from "./storage/registry.ts";
 import type { TitleGenerator } from "./titles.ts";
+import { replyUsage } from "./usage.ts";
 import { assistantText } from "./transcript.ts";
 import { isTimeZone, parseTimeOfDay, zonedEpoch, zonedTime } from "./zoned-time.ts";
 
@@ -194,7 +195,8 @@ export class Forum {
   readonly #log: (message: string) => void;
   readonly #now: () => number;
   readonly #seats = new Map<string, SeatState>();
-  readonly #titling = new Set<number>();
+  /** Each room's title being made, awaited at close. */
+  readonly #titling = new Map<number, Promise<void>>();
   /** Bots whose seats are held while their environment updates, with the rooms that were stopped. */
   readonly #held = new Map<string, Set<number>>();
   readonly #abort = new AbortController();
@@ -244,6 +246,7 @@ export class Forum {
     this.#abort.abort();
     if (this.#timer) clearInterval(this.#timer);
     await this.idle();
+    await Promise.allSettled([...this.#titling.values()]);
   }
 
   /** Resolves once every seat's queued delivery and settle has run (tests, shutdown). */
@@ -749,9 +752,13 @@ export class Forum {
     const titles = this.#titles;
     if (!titles || room.title || this.#titling.has(room.id) || this.#closed) return;
     if (!postWords(post).trim()) return;
-    this.#titling.add(room.id);
-    void titles
-      .generate(postWords(post), this.#abort.signal)
+    const work = titles
+      .generate(postWords(post), this.#abort.signal, (reply) => {
+        // A room's own calls belong to no bot.
+        void this.#registry
+          .recordUsage("", room.id, "title", replyUsage(reply))
+          .catch((error: unknown) => this.#log(`forum thread title usage: ${String(error)}`));
+      })
       .then(async (title) => {
         if (title && (await this.store.setRoomTitleIfUntitled(room.id, title))) {
           this.#events.changed?.();
@@ -761,6 +768,7 @@ export class Forum {
         if (!this.#abort.signal.aborted) this.#log(`forum thread title: ${String(error)}`);
       })
       .finally(() => this.#titling.delete(room.id));
+    this.#titling.set(room.id, work);
   }
 
   // MARK: Threads, pause, membership
