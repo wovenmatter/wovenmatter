@@ -20,7 +20,8 @@ public enum ConversationShellOperation: Equatable, Sendable {
     // `cd <pattern> &&` (Pi writes `cd /tmp/*sample &&`): what follows ran
     // only if the shell found one folder, but which is not certain, so its
     // paths keep their own words.
-    if let range = command.range(of: #"^cd +[^\s;&|<>$`'"(){}]*[*?\[][^\s;&|<>$`'"(){}]* *&& *"#, options: .regularExpression) {
+    if let match = Self.cdIntoPattern.firstMatch(in: command, range: NSRange(command.startIndex..., in: command)),
+       let range = Range(match.range, in: command) {
       command.removeSubrange(range)
       folder = nil
     }
@@ -45,6 +46,10 @@ public enum ConversationShellOperation: Equatable, Sendable {
           stages.dropFirst().allSatisfy(isFilter) else { return nil }
     return operation(first, folder: folder)
   }
+
+  /// `cd` into a folder named by a pattern, then `&&`.
+  private static let cdIntoPattern = try! NSRegularExpression(
+    pattern: #"^cd +[^\s;&|<>$`'"(){}]*[*?\[][^\s;&|<>$`'"(){}]* *&& *"#)
 
   // MARK: Commands
 

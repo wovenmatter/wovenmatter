@@ -203,7 +203,9 @@ public struct AgentRunActivity: Codable, Equatable, Identifiable, Sendable {
   public let assistantMessageID: String?
   public let assistantCheckpoint: AssistantTextCheckpoint?
   /// Canonical native part order when the provider supplies an ordered snapshot.
-  public let position: Int?
+  /// Settable so a copy can be compared at another place in the window (see
+  /// `WorkspaceRunActivityRecord.sameIgnoringWindow`).
+  public internal(set) var position: Int?
   public let locations: [AgentRunLocation]
   public let changes: [AgentRunFileChange]
   public let planEntries: [AgentRunPlanEntry]
@@ -366,9 +368,9 @@ public struct WorkspaceRunActivityRecord: Codable, Equatable, Identifiable, Send
   public let id: String
   public let runID: String
   public let conversationID: String
-  public let activity: AgentRunActivity
+  public internal(set) var activity: AgentRunActivity
   public let createdAt: String
-  public let sequence: Int64?
+  public internal(set) var sequence: Int64?
 
   public init(
     id: String,
@@ -404,5 +406,33 @@ public extension WorkspaceRunActivityRecord {
       return left < right
     }
     return lhs.id < rhs.id
+  }
+
+  /// The same records, apart from where the message window puts them: a
+  /// page of older items moves every later record's position and sequence
+  /// by the same amount, which changes no order and nothing shown.
+  static func sameIgnoringWindow(_ lhs: [Self], _ rhs: [Self]) -> Bool {
+    if lhs == rhs { return true }
+    guard lhs.count == rhs.count, let first = lhs.first, let other = rhs.first else { return false }
+    let positionShift = (other.activity.position ?? 0) - (first.activity.position ?? 0)
+    let sequenceShift = (other.sequence ?? 0) - (first.sequence ?? 0)
+    for (left, right) in zip(lhs, rhs) {
+      var moved = left
+      moved.sequence = left.sequence.map { $0 + sequenceShift }
+      moved.activity.position = left.activity.position.map { $0 + positionShift }
+      guard moved == right else { return false }
+    }
+    return true
+  }
+}
+
+public extension AgentRunActivity {
+  /// The same activity, apart from its place in the message window.
+  func sameIgnoringPosition(_ other: Self) -> Bool {
+    if self == other { return true }
+    guard position != other.position else { return false }
+    var moved = self
+    moved.position = other.position
+    return moved == other
   }
 }
