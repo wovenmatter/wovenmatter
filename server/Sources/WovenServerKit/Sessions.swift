@@ -399,6 +399,8 @@ actor SessionHost {
     if live == nil, run == .idle {
       _ = try await openLive(lettingGo: true)
       guard try goes() else { return }
+      // A goal cleared meanwhile has nothing more to send.
+      if continuesGoal, (try await library.session(sessionID)?.goal ?? "").isEmpty { return }
     }
     var files: [TurnAttachment] = []
     for attachment in attachments {

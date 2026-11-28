@@ -154,9 +154,9 @@ final class WorkspaceStore {
     }
 
     /// Asks the server for the whole overview again (File > Refresh Workspace).
-    /// Of reads that overlap, only the one started last is shown, and only
-    /// when it differs from what shows, so a late answer never replaces a
-    /// newer one and an unchanged list redraws nothing.
+    /// Of reads that overlap, each shows unless one started after it already
+    /// has, and only when it differs from what shows, so a late answer never
+    /// replaces a newer one and an unchanged list redraws nothing.
     func refresh() async {
         guard let server else { return }
         refreshes += 1
@@ -170,36 +170,41 @@ final class WorkspaceStore {
             // Bot chats and Forum rooms show only in the bots' own surfaces.
             let sessions = try await listedSessions.filter { $0.runtime != .bots }
             let notes = await listedNotes
-            guard number == refreshes else { return }
+            guard number > shownRefresh else { return }
+            shownRefresh = number
             let listed = Set(sessions.map(\.id))
-            unlistedSessions.removeAll { listed.contains($0.id) }
+            // Kept until listed, or for a minute: one trashed or deleted on its
+            // machine before it reached this Mac is never listed.
+            let kept = Date().addingTimeInterval(-60)
+            unlistedSessions.removeAll { listed.contains($0.session.id) || $0.started < kept }
             let overview = WorkspaceOverview(
                 folders: folders.map { folder in
                     WorkspaceFolderRecord(id: folder.id, name: folder.name, icon: nil, position: folder.position,
                                           isPinned: folder.pinned, machineID: folder.machineID, rootPath: folder.path,
                                           managedRoot: folder.managed, referencePaths: folder.references)
                 },
-                conversations: (unlistedSessions + sessions).map(record),
+                conversations: (unlistedSessions.map(\.session) + sessions).map(record),
                 notes: notes?.map(Self.noteRecord) ?? workspaceOverview?.notes ?? [])
             if overview != workspaceOverview { workspaceOverview = overview }
         } catch {
-            guard number == refreshes else { return }
+            guard number > shownRefresh else { return }
             folderMutationError = error.localizedDescription
         }
     }
-    /// Reads of the overview started so far, which tells the latest.
+    /// Reads of the overview started so far, and the newest one shown.
     @ObservationIgnored private var refreshes = 0
+    @ObservationIgnored private var shownRefresh = 0
 
     /// Sessions started here that this Mac's library does not list yet,
     /// newest first: one on another machine reaches it by sync. Each shows
     /// from its owner's reply until then, so the chat, its machine, folder
     /// and composer are there at once. A command this Mac's server would
     /// carry out on it waits until it is listed (`isArriving`).
-    private var unlistedSessions: [Session] = []
+    private var unlistedSessions: [(session: Session, started: Date)] = []
 
     /// The session was started here and this Mac's library does not list it yet.
     func isArriving(_ sessionID: String?) -> Bool {
-        unlistedSessions.contains { $0.id == sessionID }
+        unlistedSessions.contains { $0.session.id == sessionID }
     }
 
     private func record(_ session: Session) -> WorkspaceConversationRecord {
@@ -235,7 +240,7 @@ final class WorkspaceStore {
     func startSession(runtime: RuntimeKind, on machineID: String, folderID: String?) async throws -> String {
         let session = try await server(for: machineID).call(CreateSession(runtime: runtime, title: "New Chat", folderID: folderID))
         if workspaceOverview?.conversations.contains(where: { $0.id == session.id }) != true {
-            unlistedSessions.insert(session, at: 0)
+            unlistedSessions.insert((session, Date()), at: 0)
             workspaceOverview?.conversations.insert(record(session), at: 0)
         }
         Task { await refresh() }

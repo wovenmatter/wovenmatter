@@ -218,6 +218,9 @@ final class SessionStore {
         defer { isLoadingOlderMessages = false }
         do {
             let older = try await source.call(SessionItems(sessionID: sessionID, beforeSequence: oldest, limit: Self.pageSize))
+            // A snapshot that replaced the items meanwhile starts elsewhere: this
+            // page would leave a gap above it.
+            guard items.map(\.sequence).min() == oldest else { return false }
             let known = Set(items.map(\.id))
             items = older.filter { !known.contains($0.id) } + items
             // Only the owner has them all; this Mac's library may not have them yet.

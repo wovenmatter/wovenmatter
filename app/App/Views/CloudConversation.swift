@@ -509,7 +509,8 @@ struct CloudConversation: View {
             draft: $draft,
             attachedNoteTitle: attachedNoteTitle,
             attachments: attachments,
-            agentTools: conversation == nil ? nil : model.agentTools,
+            // A chat still on its way to this Mac's library has no tools to set yet.
+            agentTools: conversation == nil || model.workspace.isArriving(conversation?.id) ? nil : model.agentTools,
             sessionID: conversation?.id,
             supportsGoals: WorkspaceGoal.supports(conversation?.runtimeKind),
             showsSessionControls: hasRuntime,
