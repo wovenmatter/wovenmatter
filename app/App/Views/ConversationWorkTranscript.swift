@@ -60,6 +60,9 @@ struct ConversationWorkTranscript: View {
     /// A projection precomputed from `records` and `commentaryIDs`; built in
     /// `body` when absent.
     let timeline: ConversationWorkTimeline?
+    /// `records`' activities in their order, precomputed; sorted in `body`
+    /// when absent.
+    let orderedActivities: [AgentRunActivity]?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.conversationTranscriptInteraction) private var transcriptInteraction
     @Environment(\.conversationTranscriptState) private var transcriptState
@@ -74,7 +77,8 @@ struct ConversationWorkTranscript: View {
         commentaryIDs: Set<String> = [],
         hasFollowingResponse: Bool = false,
         replyStartsWithBox: Bool = false,
-        timeline: ConversationWorkTimeline? = nil
+        timeline: ConversationWorkTimeline? = nil,
+        orderedActivities: [AgentRunActivity]? = nil
     ) {
         self.run = run
         self.presentation = presentation
@@ -83,6 +87,7 @@ struct ConversationWorkTranscript: View {
         self.hasFollowingResponse = hasFollowingResponse
         self.replyStartsWithBox = replyStartsWithBox
         self.timeline = timeline
+        self.orderedActivities = orderedActivities
     }
 
     init(
@@ -91,7 +96,8 @@ struct ConversationWorkTranscript: View {
         commentaryIDs: Set<String> = [],
         hasFollowingResponse: Bool = false,
         replyStartsWithBox: Bool = false,
-        timeline: ConversationWorkTimeline? = nil
+        timeline: ConversationWorkTimeline? = nil,
+        orderedActivities: [AgentRunActivity]? = nil
     ) {
         // A run starts with its message and ends with its last saved item.
         let seconds = run.status == .running ? nil : run.startedAt.flatMap { start in
@@ -101,7 +107,8 @@ struct ConversationWorkTranscript: View {
                   presentation: ConversationWorkPresentation(startedAt: run.startedAt, completedDuration: seconds.map(formattedRunDuration),
                                                              completedSeconds: seconds),
                   records: records, commentaryIDs: commentaryIDs,
-                  hasFollowingResponse: hasFollowingResponse, replyStartsWithBox: replyStartsWithBox, timeline: timeline)
+                  hasFollowingResponse: hasFollowingResponse, replyStartsWithBox: replyStartsWithBox, timeline: timeline,
+                  orderedActivities: orderedActivities)
     }
 
 
@@ -238,7 +245,7 @@ struct ConversationWorkTranscript: View {
         // Without a session folder, the folder of the turn's first path, so
         // its rows shorten paths the same way and never change once shown.
         .environment(\.conversationFolder, folder ?? AgentRunActivity.workTimelineAnchorFolder(
-            records.sorted(by: WorkspaceRunActivityRecord.precedes).map(\.activity)))
+            orderedActivities ?? records.sorted(by: WorkspaceRunActivityRecord.precedes).map(\.activity)))
     }
 
     /// Entries sit an entry apart. A visual reply keeps a section's space on

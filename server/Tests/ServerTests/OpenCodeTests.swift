@@ -574,6 +574,14 @@ func anOpenCodeScriptThatPublishesAVisualReplyIsSavedAsTheVisualReplyAndOneScrip
   }
 }
 
+/// Names a new session's native session `ses_planner`, as the scripts below
+/// do, once its runtime, which starts when the session is created, has
+/// recorded its own.
+private func namePlannersNativeSession(_ sessionID: String, in server: WovenServer) async throws {
+  while try await server.library.nativeSession(for: sessionID) == nil { try await Task.sleep(for: .milliseconds(5)) }
+  try await server.library.setNativeSession(sessionID, runtime: .openCode, handle: "ses_planner")
+}
+
 /// Every Woven tool answers a script in OpenCode, which names its native
 /// session in each call over the one bridge the whole process shares: the
 /// call is the session's own. Each is listed under a name a script can
@@ -585,7 +593,7 @@ func everyWovenToolAnswersAnOpenCodeScriptAsItsSession() async throws {
   defer { server.stopLater() }
   let session = try await ui.call(CreateSession(runtime: .openCode, title: "Planner"))
   _ = try await ui.call(UpdateSession(sessionID: session.id, tools: Set(ToolGroup.allCases)))
-  try await server.library.setNativeSession(session.id, runtime: .openCode, handle: "ses_planner")
+  try await namePlannersNativeSession(session.id, in: server)
   let builder = try await ui.call(CreateSession(runtime: StandInRuntime.kind, title: "Builder"))
   let page = FileManager.default.temporaryDirectory.appendingPathComponent("woven-\(UUID().uuidString).html")
   let html = "<!doctype html><title>Plan</title><p>From a file</p>"
@@ -667,7 +675,7 @@ func everyWovenToolAnswersWithAValueItsOutputSchemaDescribes() async throws {
   defer { server.stopLater() }
   let session = try await ui.call(CreateSession(runtime: .openCode, title: "Planner"))
   _ = try await ui.call(UpdateSession(sessionID: session.id, tools: Set(ToolGroup.allCases)))
-  try await server.library.setNativeSession(session.id, runtime: .openCode, handle: "ses_planner")
+  try await namePlannersNativeSession(session.id, in: server)
   _ = try await server.library.updateSession(session.id, goal: .some("Plan the week"))
   let builder = try await ui.call(CreateSession(runtime: StandInRuntime.kind, title: "Builder"))
   let page = FileManager.default.temporaryDirectory.appendingPathComponent("woven-\(UUID().uuidString).html")

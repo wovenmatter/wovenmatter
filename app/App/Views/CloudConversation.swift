@@ -74,6 +74,9 @@ struct CloudConversation: View {
     @State private var attachmentOpenError: String?
     @State private var choosingFolder = false
     @State private var folderSelectionError: String?
+    /// What the rows and the transcript's views ask this chat to do; one
+    /// object for the view's life, its actions set again on every pass.
+    @State private var rowActions = ConversationRowActions()
 
     /// The open chat's live state; nil before a chat is chosen.
     private var session: SessionStore? {
@@ -93,6 +96,7 @@ struct CloudConversation: View {
     }
 
     @ViewBuilder var body: some View {
+        let actions = refreshedRowActions()
         let runsByAssistantMessageID = self.runsByAssistantMessageID
         let activitiesByRunID = self.activitiesByRunID
         let visibleMessages = self.visibleMessages(runs: runsByAssistantMessageID)
@@ -152,7 +156,7 @@ struct CloudConversation: View {
                             }
                             ForEach(rows) { row in
                                 VStack(spacing: 0) {
-                                    messageRow(row, runs: runsByAssistantMessageID, activities: activitiesByRunID)
+                                    messageRow(row, runs: runsByAssistantMessageID, activities: activitiesByRunID, actions: actions)
                                 }
                                 .id(row.id)
                                 .background {
@@ -250,17 +254,10 @@ struct CloudConversation: View {
                     scrollState.setNearBottom(false)
                     scroll { $0.scrollTo(y: y) }
                 }
-                .environment(\.conversationTranscriptInteraction) {
-                    transcriptOwnsScroll = true
-                    // Pin where the reader is now, so what they opened or chose
-                    // stays where it is while it changes size.
-                    scroll { $0.scrollTo(y: hold.offset) }
-                    scrollState.setNearBottom(false)
-                }
-                .environment(\.conversationActivityDetails) { runID, activityID in
-                    guard let session else { return nil }
-                    return try await session.activityDetails(runID: runID, activityID: activityID)
-                }
+                // The same two closures on every pass, so the views reading
+                // them are not drawn again for it; each calls this pass's action.
+                .environment(\.conversationTranscriptInteraction, actions.forwardedInteraction)
+                .environment(\.conversationActivityDetails, actions.forwardedActivityDetails)
                 .defaultScrollAnchor(.bottom, for: .initialOffset)
                 // Following the latest reply, growth keeps the bottom in place
                 // in the same layout pass; a later scroll would show each
@@ -336,6 +333,13 @@ struct CloudConversation: View {
                 .padding(.bottom, ConversationBottomOverlayLayout.bottomOffset)
         }
         .background(theme.palette.workspace)
+        // The row actions hold this view, whose state holds them: let them go
+        // while it is not shown, and set them again when it shows.
+        .onAppear {
+            rowActions.reinstate()
+            _ = refreshedRowActions()
+        }
+        .onDisappear { rowActions.retire() }
         .environment(\.conversationCopyScope, copyScope)
         .environment(\.conversationTranscriptState, session?.transcriptState)
         .environment(\.conversationFolder, sessionFolder)
@@ -355,21 +359,48 @@ struct CloudConversation: View {
     private func messageRow(
         _ fragment: ConversationMessageRow,
         runs: [String: WorkspaceRunRecord],
-        activities: [String: [WorkspaceRunActivityRecord]]
+        activities: [String: [WorkspaceRunActivityRecord]],
+        actions: ConversationRowActions
     ) -> some View {
         let message = fragment.message
         let run = runs[message.id]
+        // A row whose data is the same as in the last pass is not drawn again.
         MessageRow(
             message: message,
             run: run.flatMap { $0.status == .queued ? nil : $0 },
             activities: run.map { activities[$0.id] ?? [] } ?? [],
-            onOpenAttachment: openAttachment,
-            resolveFile: { source in
-                try await model.library.fileURL(id: WorkspaceLibraryItem.identifier(messageID: message.libraryItemID, source: source))
-            },
             layout: fragment.layout,
-            onNewSession: message.id == session?.goneNoticeID && conversation?.isArchived == false ? onNewSession : nil
+            offersNewSession: message.id == session?.goneNoticeID && conversation?.isArchived == false && onNewSession != nil,
+            actions: actions
         )
+        .equatable()
+    }
+
+    /// `rowActions`, set to act for the chat as it is in this pass, unless
+    /// the view is not shown.
+    private func refreshedRowActions() -> ConversationRowActions {
+        let actions = rowActions
+        guard !actions.isRetired else { return actions }
+        actions.openAttachment = { attachment in openAttachment(attachment) }
+        // Only the library, never this view: a file dragged out finishes resolving
+        // after its panel has closed (`retire` keeps it).
+        let library = model.library
+        actions.resolveFile = { libraryItemID, source in
+            try await library.fileURL(id: WorkspaceLibraryItem.identifier(messageID: libraryItemID, source: source))
+        }
+        actions.newSession = { onNewSession?() }
+        actions.transcriptInteraction = {
+            transcriptOwnsScroll = true
+            // Pin where the reader is now, so what they opened or chose
+            // stays where it is while it changes size.
+            scroll { $0.scrollTo(y: hold.offset) }
+            scrollState.setNearBottom(false)
+        }
+        actions.activityDetails = { runID, activityID in
+            guard let session else { return nil }
+            return try await session.activityDetails(runID: runID, activityID: activityID)
+        }
+        return actions
     }
 
     // MARK: Bottom stack
@@ -442,14 +473,14 @@ struct CloudConversation: View {
         if let conversation, let notice = model.macAccessNotice(for: conversation) {
             MacAccessNotice(message: notice, openSettings: { model.navigation.pendingConnectionsScope = "permissions" })
         }
-        if let conversation, !conversation.isArchived, session?.isOwnerReachable == false {
+        if let conversation, !conversation.isArchived, session?.isOwnerDisconnected == true {
             // Its saved history shows; controls return when its owner reconnects.
             MacAccessNotice(message: "\(model.machines.machine(id: conversation.machineID)?.name ?? "Its machine") is not connected. Woven Matter reconnects automatically.",
                 openSettings: nil)
                 .accessibilityIdentifier("remote-conversation-offline")
         }
         if let conversation, !conversation.isArchived, conversation.runtimeKind == .defaultAgent,
-           session?.settings?.selectableModels.isEmpty == true {
+           session?.settings?.selectableModels.isEmpty == true, session?.optionsLoading != true {
             Button {
                 model.navigation.pendingDefaultAgentSettingsScope =
                     model.connections.settings.machines[conversation.machineID] == nil ? "global" : conversation.machineID
@@ -490,12 +521,13 @@ struct CloudConversation: View {
             draft: $draft,
             attachedNoteTitle: attachedNoteTitle,
             attachments: attachments,
-            agentTools: conversation == nil ? nil : model.agentTools,
+            // A chat still on its way to this Mac's library has no tools to set yet.
+            agentTools: conversation == nil || model.workspace.isArriving(conversation?.id) ? nil : model.agentTools,
             sessionID: conversation?.id,
             supportsGoals: WorkspaceGoal.supports(conversation?.runtimeKind),
             showsSessionControls: hasRuntime,
             showsPermissionControl: hasRuntime,
-            sessionMetadataLoading: hasRuntime && session?.settings == nil,
+            sessionMetadataLoading: hasRuntime && (session?.settings == nil || session?.optionsLoading == true),
             sessionMetadata: hasRuntime ? session?.settings : nil,
             sessionControlsDisabled: !hasRuntime || isReadOnly,
             sendDisabled: sendInProgress || (conversation != nil && (isReadOnly || !hasRuntime)),
@@ -527,7 +559,9 @@ struct CloudConversation: View {
             availableFolders: conversation.map { model.workspace.folders(on: $0.machineID) } ?? [],
             selectedFolderID: conversation?.folderID,
             folderMachineID: conversation?.machineID,
-            folderSelectionDisabled: isReadOnly || choosingFolder || sendInProgress || session?.hasUserMessage != false,
+            // This Mac's server moves it, once its library holds the chat.
+            folderSelectionDisabled: isReadOnly || choosingFolder || sendInProgress || session?.hasUserMessage != false
+                || model.workspace.isArriving(conversation?.id),
             onSelectFolder: { folderID in
                 guard let session, !isReadOnly, !choosingFolder else { return }
                 choosingFolder = true
@@ -651,15 +685,11 @@ struct CloudConversation: View {
     }
 
     private var runsByAssistantMessageID: [String: WorkspaceRunRecord] {
-        (session?.runs ?? []).reduce(into: [:]) {
-            if let assistantMessageID = $1.assistantMessageID {
-                $0[assistantMessageID] = $1
-            }
-        }
+        session?.runsByAssistantMessageID ?? [:]
     }
 
     private var activitiesByRunID: [String: [WorkspaceRunActivityRecord]] {
-        Dictionary(grouping: session?.runActivities ?? [], by: \.runID)
+        session?.activitiesByRunID ?? [:]
     }
 
     /// An empty reply to a run that has not started yet is not shown.
@@ -922,39 +952,69 @@ func nonemptyString(_ value: String?) -> String? {
     return trimmed
 }
 
-struct MessageRow: View {
+/// What a transcript's rows and views ask its chat to do. One object for the
+/// chat view's life, so rows compare equal from pass to pass; the chat sets
+/// its actions again on every pass, so each acts for the chat as it is then.
+/// Rows pass what is theirs (the item a file belongs to) as arguments.
+/// The actions hold the chat view, whose state holds this object, so they
+/// are let go while the view is not shown (`retire`).
+@MainActor
+final class ConversationRowActions {
+    var openAttachment: (SessionMessageAttachment) -> Void = { _ in }
+    /// The URL of a file a reply refers to: the item whose library entries carry it, and its source.
+    var resolveFile: (_ libraryItemID: String, _ source: String) async throws -> URL = { _, _ in throw CancellationError() }
+    var newSession: () -> Void = {}
+    var transcriptInteraction: @MainActor () -> Void = {}
+    var activityDetails: @MainActor (_ runID: String, _ activityID: String) async throws -> AgentRunActivity? = { _, _ in nil }
+    /// The view is not shown: its actions are let go, and none are set until it shows again.
+    private(set) var isRetired = false
+
+    func retire() {
+        isRetired = true
+        openAttachment = { _ in }
+        newSession = {}
+        transcriptInteraction = {}
+        activityDetails = { _, _ in nil }
+    }
+
+    func reinstate() { isRetired = false }
+
+    /// The two the transcript's environment carries, each made once, so the
+    /// views reading them see the same closure on every pass.
+    private(set) lazy var forwardedInteraction: @MainActor () -> Void = { [weak self] in
+        self?.transcriptInteraction()
+    }
+    private(set) lazy var forwardedActivityDetails: @MainActor (_ runID: String, _ activityID: String) async throws
+        -> AgentRunActivity? = { [weak self] runID, activityID in
+            try await self?.activityDetails(runID, activityID)
+        }
+}
+
+struct MessageRow: View, Equatable {
     /// What Copy puts before a reply's text: its visual replies' text, if any.
     static func copyLead(_ keys: [String]) -> (@MainActor @Sendable () async -> String?)? {
         guard !keys.isEmpty else { return nil }
         return { @MainActor @Sendable in await ConversationVisualReplyText.text(of: keys) }
     }
 
-    /// Whether reply text opens with a box: fenced code or a table.
-    static func startsWithBox(_ text: String) -> Bool {
-        guard let first = text.split(whereSeparator: \.isNewline).first(where: {
-            !$0.trimmingCharacters(in: .whitespaces).isEmpty
-        })?.trimmingCharacters(in: .whitespaces) else { return false }
-        return first.hasPrefix("```") || first.hasPrefix("~~~") || first.hasPrefix("|")
-    }
-
     let message: WorkspaceMessageRecord
     let run: WorkspaceRunRecord?
     let activities: [WorkspaceRunActivityRecord]
-    let onOpenAttachment: (SessionMessageAttachment) -> Void
-    let resolveFile: (String) async throws -> URL
     let layout: ConversationMessageLayout.Row
-    var onNewSession: (() -> Void)? = nil
+    /// The notice that the chat's native session is gone offers a new chat.
+    let offersNewSession: Bool
+    let actions: ConversationRowActions
     @Environment(\.conversationCopyScope) private var copyScope
+
+    /// The same data draws the same row: a pass of the transcript for its
+    /// scroll or layout leaves the row as it is.
+    nonisolated static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.message == rhs.message && lhs.run == rhs.run && lhs.activities == rhs.activities && lhs.layout == rhs.layout
+            && lhs.offersNewSession == rhs.offersNewSession && lhs.actions === rhs.actions
+    }
 
     private var isStreaming: Bool {
         AssistantStreamingText.isStreaming(messageStatus: message.status, runStatus: run?.status)
-    }
-    /// The reply's text, apart from the commentary the work log shows.
-    private var transcript: (body: String, commentaryIDs: Set<String>) {
-        let work = activities.map(\.activity)
-        return ConversationWorkTimeline.displayPartition(
-            AssistantTranscriptProjection(messageID: message.id, content: message.content, activities: work),
-            activities: work)
     }
 
     var body: some View {
@@ -963,8 +1023,8 @@ struct MessageRow: View {
                 Image(systemName: "info.circle")
                 Text(message.content)
                     .lineLimit(1)
-                if let onNewSession {
-                    ConversationTextButton("New Chat", action: onNewSession)
+                if offersNewSession {
+                    ConversationTextButton("New Chat") { actions.newSession() }
                 }
             }
             .font(.system(size: 12))
@@ -984,22 +1044,25 @@ struct MessageRow: View {
                         content: message.senderKind == .goal ? "Continuing toward the goal." : message.content,
                         attachments: message.attachments,
                         references: message.references,
-                        onOpenAttachment: onOpenAttachment
+                        onOpenAttachment: { actions.openAttachment($0) }
                     )
                 }
             }
             .fixedSize(horizontal: false, vertical: true)
         } else {
-            assistantTurn(transcript)
+            assistantTurn(AssistantTurnDisplays.display(
+                sessionID: message.conversationID, messageID: message.id, content: message.content,
+                isStreaming: isStreaming, records: activities))
         }
     }
 
-    /// The partition is worked out once per update and shared by every part.
+    /// The display is worked out once for each change of the reply or its
+    /// run's records, and shared by every part.
     @ViewBuilder
-    private func assistantTurn(_ transcript: (body: String, commentaryIDs: Set<String>)) -> some View {
-        let reply = isStreaming ? AssistantStreamingText.readyPrefix(of: transcript.body) : transcript.body
+    private func assistantTurn(_ display: AssistantTurnDisplay) -> some View {
+        let reply = display.reply
         // Text the work transcript leaves to the response below it.
-        let hasResponseText = !reply.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let hasResponseText = display.hasResponseText
         let showsReply = ConversationMessageLayout.showsAssistantBody(
             content: message.content,
             displayedBody: reply,
@@ -1016,10 +1079,11 @@ struct MessageRow: View {
                     ConversationWorkTranscript(
                         run: run,
                         records: activities,
-                        commentaryIDs: transcript.commentaryIDs,
+                        commentaryIDs: display.commentaryIDs,
                         hasFollowingResponse: hasResponseText && showsReply,
-                        replyStartsWithBox: Self.startsWithBox(reply),
-                        timeline: ConversationWorkTimeline(records: activities, commentaryIDs: transcript.commentaryIDs)
+                        replyStartsWithBox: display.replyStartsWithBox,
+                        timeline: display.timeline,
+                        orderedActivities: display.orderedActivities
                     )
                 }
                 if showsReply {
@@ -1029,7 +1093,9 @@ struct MessageRow: View {
                         isCut: !isStreaming && (run?.status == .cancelled || run?.status == .failed),
                         // The running turn's dots, under the text it is writing.
                         showsRunningDots: run?.status == .running && hasResponseText,
-                        fileRow: ConversationFileRow(messageID: message.libraryItemID, resolveFile: resolveFile)
+                        fileRow: ConversationFileRow(messageID: message.libraryItemID) { [actions, libraryItemID = message.libraryItemID] source in
+                            try await actions.resolveFile(libraryItemID, source)
+                        }
                     )
                     // Copy takes the whole answer: the visual replies' text above the reply's.
                     .environment(\.conversationCopyLead, Self.copyLead(visualKeys))

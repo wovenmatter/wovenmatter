@@ -149,8 +149,12 @@ final class MachinesStore {
             listError = error.localizedDescription
         }
         // Each runtime's status runs its CLI, so library changes do not read
-        // them again; Settings and installs do (`refreshHarnesses`).
-        if !hasReadRuntimes, let thisID = thisMachine?.id { await readRuntimes(on: thisID, checkForUpdates: false) }
+        // them again; Settings and installs do (`refreshHarnesses`). That
+        // takes seconds, so nothing waits for it: the folders and chats a
+        // reload brings next are this Mac's library, read in milliseconds.
+        if !hasReadRuntimes, let thisID = thisMachine?.id {
+            Task { await readRuntimes(on: thisID, checkForUpdates: false) }
+        }
     }
 
     // MARK: Server on each machine

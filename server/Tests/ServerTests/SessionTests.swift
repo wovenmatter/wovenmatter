@@ -79,6 +79,156 @@ private func assistantTexts(_ items: [SessionItem]) -> [String] {
   items.compactMap { if case .assistantMessage(let text) = $0.content { text } else { nil } }
 }
 
+/// Waits until `condition` holds; the test's time limit ends a wait that never does.
+private func waitUntil(_ condition: () async -> Bool) async throws {
+  while !(await condition()) { try await Task.sleep(for: .milliseconds(5)) }
+}
+
+@Test(.timeLimit(.minutes(1)))
+func aNewSessionShowsItsSavedChoicesWhileItsRuntimeOpensAndItsOwnOnceItHas() async throws {
+  let opening = StandInRuntime.Gate()
+  let store = StandInRuntime.NativeStore()
+  let machine = try await TestServer.start(runtime: StandInRuntime(store: store, opening: opening))
+  defer { machine.server.stopLater() }
+  let client = try await machine.connect()
+  _ = try await client.call(SetSetting(key: "agentDefaults.\(StandInRuntime.kind.rawValue)",
+                                       value: .object(["model": .string("quick"), "thinking": .string("high")])))
+
+  // The reply does not wait for the runtime, which is held as it opens.
+  let session = try await client.call(CreateSession(runtime: StandInRuntime.kind, title: "Chat"))
+  #expect(session.model == "quick" && session.thinking == "high")
+  try await waitUntil { await opening.waiting == 1 }
+  let subscription = try await client.subscribe(SubscribeSession(sessionID: session.id))
+  #expect(subscription.reply.configuration.model == "quick")
+  #expect(subscription.reply.configuration.thinking == "high")
+  // This machine has never seen the runtime, so its options are still to come.
+  #expect(subscription.reply.configuration.models.isEmpty)
+  #expect(subscription.reply.configuration.awaitingOptions == true)
+  #expect(store.started == 0)
+
+  await opening.open()
+  var reported: SessionConfiguration?
+  for try await event in subscription.events {
+    if case .configuration(let configuration) = event, configuration.awaitingOptions == nil {
+      reported = configuration
+      break
+    }
+  }
+  #expect(reported?.models.map(\.id) == ["stand-in"])
+  #expect(store.started == 1 && store.running == 1)
+}
+
+@Test(.timeLimit(.minutes(1)))
+func aNewSessionWithNoSavedChoicesShowsWhatItsRuntimeStartsWithBeforeItOpens() async throws {
+  // A first new session teaches this machine what the runtime starts with.
+  let store = StandInRuntime.NativeStore()
+  let first = try await TestServer.start(runtime: StandInRuntime(store: store))
+  let earlier = try await first.connect()
+  _ = try await earlier.call(CreateSession(runtime: StandInRuntime.kind, title: "First"))
+  // Kept once the open has settled, before the server stops.
+  let kept = first.folder.appendingPathComponent("scratch/runtime-start-choices.json")
+  try await waitUntil { FileManager.default.fileExists(atPath: kept.path) }
+  await first.server.stop()
+
+  // After a restart, the next one shows it while its runtime is still held.
+  let opening = StandInRuntime.Gate()
+  let second = try await TestServer.start(folder: first.folder, runtime: StandInRuntime(store: store, opening: opening))
+  defer { second.server.stopLater() }
+  let client = try await second.connect()
+  let session = try await client.call(CreateSession(runtime: StandInRuntime.kind, title: "Second"))
+  try await waitUntil { await opening.waiting == 1 }
+  let subscription = try await client.subscribe(SubscribeSession(sessionID: session.id))
+  #expect(subscription.reply.configuration.model == "stand-in")
+  // It stands in for a choice; none is saved.
+  #expect(session.model == nil)
+  #expect(try await second.server.library.session(session.id)?.model == nil)
+  await opening.open()
+}
+
+@Test(.timeLimit(.minutes(1)))
+func aChatOpensAtOnceWhileItsRuntimeResumesForAMessage() async throws {
+  let store = StandInRuntime.NativeStore()
+  let first = try await TestServer.start(runtime: StandInRuntime(store: store))
+  let earlier = try await first.connect()
+  let session = try await earlier.call(CreateSession(runtime: StandInRuntime.kind, title: "Chat"))
+  try await turn(earlier, session.id, "one")
+  await first.server.stop()
+
+  let opening = StandInRuntime.Gate()
+  let second = try await TestServer.start(folder: first.folder, runtime: StandInRuntime(store: store, opening: opening))
+  defer { second.server.stopLater() }
+  let client = try await second.connect()
+  let subscription = try await client.subscribe(SubscribeSession(sessionID: session.id))
+  let sent = Task { try await client.call(SendTurn(sessionID: session.id, text: "two")) }
+  try await waitUntil { await opening.waiting == 1 }
+  // Another view opens the chat while the runtime resumes for the message.
+  let other = try await second.connect()
+  let later = try await other.subscribe(SubscribeSession(sessionID: session.id))
+  #expect(later.reply.items == subscription.reply.items)
+  #expect(later.reply.configuration.models.map(\.id) == ["stand-in"])
+  #expect(store.resumed == 0)
+
+  await opening.open()
+  _ = try await sent.value
+  for try await event in later.events where event == .runState(.idle) { break }
+  let items = try await client.call(SessionItems(sessionID: session.id))
+  #expect(assistantTexts(items) == ["Turn 1: one", "Turn 2: two"])
+  #expect(store.started == 1 && store.resumed == 1)
+}
+
+@Test(.timeLimit(.minutes(1)))
+func aMessageSentWhileTheRuntimeOpensGoesOnceItHasOpened() async throws {
+  let opening = StandInRuntime.Gate()
+  let store = StandInRuntime.NativeStore()
+  let machine = try await TestServer.start(runtime: StandInRuntime(store: store, opening: opening))
+  defer { machine.server.stopLater() }
+  let client = try await machine.connect()
+  let session = try await client.call(CreateSession(runtime: StandInRuntime.kind, title: "Chat"))
+  try await waitUntil { await opening.waiting == 1 }
+  let subscription = try await client.subscribe(SubscribeSession(sessionID: session.id))
+  let sent = Task { try await client.call(SendTurn(sessionID: session.id, text: "hello")) }
+  // The send waits for the open already under way rather than starting one.
+  try await Task.sleep(for: .milliseconds(100))
+  #expect(await opening.waiting == 1)
+
+  await opening.open()
+  _ = try await sent.value
+  for try await event in subscription.events where event == .runState(.idle) { break }
+  let items = try await client.call(SessionItems(sessionID: session.id))
+  #expect(items.filter { $0.content == .userMessage(text: "hello") }.count == 1)
+  #expect(assistantTexts(items) == ["Turn 1: hello"])
+  #expect(store.started == 1 && store.running == 1)
+}
+
+@Test(.timeLimit(.minutes(1)))
+func aRuntimeThatOpensAsItsSessionIsDeletedOrItsServerStopsIsStopped() async throws {
+  let opening = StandInRuntime.Gate()
+  let store = StandInRuntime.NativeStore()
+  let machine = try await TestServer.start(runtime: StandInRuntime(store: store, opening: opening))
+  let client = try await machine.connect()
+  let deleted = try await client.call(CreateSession(runtime: StandInRuntime.kind, title: "Deleted"))
+  try await waitUntil { await opening.waiting == 1 }
+  let deletion = Task { try await client.call(DeleteSession(sessionID: deleted.id)) }
+  // Room for the deletion to reach the opening before it is let through.
+  try await Task.sleep(for: .milliseconds(500))
+  await opening.open()
+  _ = try await deletion.value
+  #expect(store.started == 1 && store.running == 0)
+  #expect(try await machine.server.library.nativeSession(for: deleted.id) == nil)
+
+  let held = StandInRuntime.Gate()
+  let second = try await TestServer.start(runtime: StandInRuntime(store: store, opening: held))
+  let kept = try await (try await second.connect()).call(CreateSession(runtime: StandInRuntime.kind, title: "Kept"))
+  try await waitUntil { await held.waiting == 1 }
+  let stopping = Task { await second.server.stop() }
+  try await Task.sleep(for: .milliseconds(100))
+  await held.open()
+  await stopping.value
+  #expect(store.started == 2 && store.running == 0)
+  #expect(!kept.id.isEmpty)
+  await machine.server.stop()
+}
+
 @Test(.timeLimit(.minutes(1)))
 func streamedSessionIsSavedOnceAndALateSubscriberSeesAConsistentView() async throws {
   let gate = StandInRuntime.Gate()

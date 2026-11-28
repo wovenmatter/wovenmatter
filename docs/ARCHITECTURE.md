@@ -253,6 +253,15 @@ behind one adapter interface in the server and are treated alike:
 - A client that subscribes gets the newest 200 finished items, the item in
   progress if there is one, then live events. Older items are fetched a page
   at a time as the person scrolls back.
+- Starting a runtime's process can take seconds, and nothing waits for it
+  that need not. Creating a session replies once it is saved, and its
+  runtime starts in the background. While a runtime starts for a new
+  session or resumes for a message, a client that subscribes gets its
+  snapshot at once, with the saved choices (or, where no choice at all was
+  saved, what the runtime last started a new session with in that folder
+  on its machine) and the options it last reported there, and hears the
+  runtime's own when it is in; a message sent meanwhile goes once it has
+  opened.
 
 When the owning machine is unreachable, the session shows its saved items and
 sending is disabled.

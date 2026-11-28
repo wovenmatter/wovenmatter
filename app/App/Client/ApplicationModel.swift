@@ -35,6 +35,8 @@ final class ApplicationModel {
     /// This Mac's connection and one to each other machine's server.
     private(set) var machineConnections: MachineConnections?
     @ObservationIgnored private var following: Task<Void, Never>?
+    /// Other machines whose server the UI was connected to when last looked at.
+    @ObservationIgnored private var connectedRemotes: Set<String> = []
 
     let navigation = NavigationStore()
     let machines = MachinesStore()
@@ -77,6 +79,15 @@ final class ApplicationModel {
         self.server = server
         let machineConnections = MachineConnections(local: server)
         self.machineConnections = machineConnections
+        // The schedules' last runs and the databases' owners are read from each
+        // owner while it is connected: a machine that connects after the first
+        // read, as one on the tailnet usually does, has them read again.
+        machineConnections.whenChanged { [weak self, weak machineConnections] in
+            guard let self, let machineConnections else { return }
+            let connected = Set(machineConnections.remotes.filter { $0.value.isConnected }.map(\.key))
+            if !connected.isSubset(of: connectedRemotes) { requestReload(["schedules", "databases"]) }
+            connectedRemotes = connected
+        }
         machines.attach(machineConnections)
         usage.attach(server, machines: machines)
         workspace.attach(server, machines: machines)
@@ -127,8 +138,12 @@ final class ApplicationModel {
     /// Reads again only the areas whose tables changed.
     private func reload(_ tables: Set<String>) async {
         func any(_ names: String...) -> Bool { !tables.isDisjoint(with: names) }
-        if any("machines") { await machines.reload() }
-        if any("machines", "sessions", "folders", "session_items", "artifacts") { await workspace.refresh() }
+        // The machines and the folders and chats under them are read together.
+        let readsMachines = any("machines")
+        let readsWorkspace = any("machines", "sessions", "folders", "session_items", "artifacts")
+        async let machinesRead: Void = readsMachines ? machines.reload() : ()
+        async let workspaceRead: Void = readsWorkspace ? workspace.refresh() : ()
+        _ = await (machinesRead, workspaceRead)
         if any("artifacts", "artifact_versions") { await documents.reload() }
         if any("databases") { await databases.refresh() }
         if any("settings", "sealed_secrets") { await settings.reload() }

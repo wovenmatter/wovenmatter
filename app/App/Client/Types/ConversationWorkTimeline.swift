@@ -221,6 +221,9 @@ public struct ConversationWorkGroup: Equatable, Identifiable, Sendable {
   public let activities: [AgentRunActivity]
   /// Settled summary, such as "Ran 3 commands and read 2 files".
   public let summary: String
+  /// The facts of `summary` as short count-first parts, for a column too
+  /// narrow for the sentence: "2 files changed · 3 previews · ToolSearch".
+  public let compactSummary: String
   /// The single action shared by every tool call, for the summary icon.
   public let action: ConversationToolAction?
   public let isThoughtOnly: Bool
@@ -236,11 +239,15 @@ public struct ConversationWorkGroup: Equatable, Identifiable, Sendable {
     self.activities = activities
     let tools = activities.filter { $0.kind != .thought }
     isThoughtOnly = tools.isEmpty
-    let actions = Set(tools.map { ConversationToolAction($0) })
-    action = actions.count == 1 ? actions.first : nil
+    // Each call is classified once, for the icon and the summary alike.
+    let actions = tools.map { ConversationToolAction($0) }
+    let distinct = Set(actions)
+    action = distinct.count == 1 ? distinct.first : nil
     hasFailure = tools.contains(where: \.workTimelineIsFailure)
     // Through the same redaction as the rows it sums up.
-    summary = Self.summary(activities: activities, tools: tools).workTimelineRedactingCredentials
+    let parts = Self.summaryParts(activities: activities, tools: tools, actions: actions)
+    summary = Self.summary(parts).workTimelineRedactingCredentials
+    compactSummary = parts.map(\.compact).joined(separator: " · ").workTimelineRedactingCredentials
     activeActivityIDs = Set(activities.enumerated().compactMap { index, activity in
       let live = activity.kind == .thought
         ? endsTimeline && index == activities.count - 1
@@ -264,17 +271,10 @@ public struct ConversationWorkGroup: Equatable, Identifiable, Sendable {
 
   public var hasActiveActivity: Bool { !activeActivityIDs.isEmpty }
 
-  static func summary(activities: [AgentRunActivity], tools: [AgentRunActivity]) -> String {
-    sentence(summaryParts(activities: activities, tools: tools).enumerated().map { index, part in
+  static func summary(_ parts: [SummaryPart]) -> String {
+    sentence(parts.enumerated().map { index, part in
       index == 0 || part.startsWithName ? part.sentence : part.sentence.prefix(1).lowercased() + part.sentence.dropFirst()
     })
-  }
-
-  /// The facts of `summary` as short count-first parts, for a column too
-  /// narrow for the sentence: "2 files changed · 3 previews · ToolSearch".
-  public var compactSummary: String {
-    Self.summaryParts(activities: activities, tools: activities.filter { $0.kind != .thought })
-      .map(\.compact).joined(separator: " · ").workTimelineRedactingCredentials
   }
 
   /// One fact of a summary, as the sentence words it and in compact form.
@@ -292,7 +292,9 @@ public struct ConversationWorkGroup: Equatable, Identifiable, Sendable {
   /// read failed"); any other verb counts every call and says how many
   /// failed ("Ran 2 commands, 1 failed", or "ran 2 commands (1 failed)"
   /// beside other kinds), or that all did ("2 commands failed").
-  static func summaryParts(activities: [AgentRunActivity], tools: [AgentRunActivity]) -> [SummaryPart] {
+  /// `actions` classifies each of `tools`, in order.
+  static func summaryParts(activities: [AgentRunActivity], tools: [AgentRunActivity],
+                           actions: [ConversationToolAction]) -> [SummaryPart] {
     if tools.isEmpty {
       let label = activities.count == 1 ? activities[0].workTimelineLabel(active: false) : "Thought (×\(activities.count))"
       return [SummaryPart(sentence: label, compact: label)]
@@ -301,8 +303,8 @@ public struct ConversationWorkGroup: Equatable, Identifiable, Sendable {
     struct Kind: Hashable { let action: ConversationToolAction; let helper: WorkTimelineHelper.Kind? }
     var kindOrder: [Kind] = []
     var members: [Kind: [AgentRunActivity]] = [:]
-    for tool in tools {
-      let kind = Kind(action: ConversationToolAction(tool), helper: tool.workTimelineHelper?.kind)
+    for (tool, action) in zip(tools, actions) {
+      let kind = Kind(action: action, helper: tool.workTimelineHelper?.kind)
       if members[kind] == nil { kindOrder.append(kind) }
       members[kind, default: []].append(tool)
     }
@@ -416,6 +418,12 @@ public enum ConversationToolAction: Hashable, Sendable {
   /// `readsOutput` false classifies by the tool and its input alone, as a
   /// run's path anchor must, since output may come later.
   public init(_ activity: AgentRunActivity, readsOutput: Bool = true) {
+    self = readsOutput
+      ? WorkTimelineMemo.shared.derived(activity, \.action) { Self(classifying: activity, readsOutput: true) }
+      : WorkTimelineMemo.shared.derived(activity, \.actionFromInput) { Self(classifying: activity, readsOutput: false) }
+  }
+
+  private init(classifying activity: AgentRunActivity, readsOutput: Bool) {
     let name = activity.workTimelineToolIdentity.lowercased()
     if let visual = Self.wovenVisual(activity) {
       self = visual
@@ -719,6 +727,10 @@ public extension AgentRunActivity {
   /// ACP's toolName can be a broad category (not the called tool name).
   /// Prefer its real title when the category would erase that identity.
   var workTimelineToolIdentity: String {
+    WorkTimelineMemo.shared.derived(self, \.identity) { workTimelineToolIdentityWorkedOut }
+  }
+
+  private var workTimelineToolIdentityWorkedOut: String {
     let name = toolName?.workTimelineSingleLine ?? ""
     let label = title?.workTimelineSingleLine ?? ""
     let generic = ["", "other", "unknown", "tool", "use tool", "using a tool", "used a tool", "execute"]
@@ -807,6 +819,10 @@ public extension AgentRunActivity {
   /// what a file tool does: search, list, or read one file. Nil when not
   /// plainly so; the row then shows the command itself.
   var workTimelineOperation: ConversationShellOperation? {
+    WorkTimelineMemo.shared.derived(self, \.operation) { workTimelineOperationWorkedOut }
+  }
+
+  private var workTimelineOperationWorkedOut: ConversationShellOperation? {
     let input = workTimelineInput
     let folder = ["cwd", "workdir"].lazy.compactMap { input?[$0] as? String }.first
     if workTimelineIsCommand || (toolName?.lowercased() == "execute" && codeCalls == nil) {
@@ -882,6 +898,10 @@ public extension AgentRunActivity {
   /// shell (`/bin/zsh -lc "…"`, which Codex titles as the quoted inner
   /// command) is the inner command.
   var workTimelineTitledCommand: String? {
+    WorkTimelineMemo.shared.derived(self, \.titledCommand) { workTimelineTitledCommandWorkedOut }
+  }
+
+  private var workTimelineTitledCommandWorkedOut: String? {
     guard let given = workTimelineInput?["command"] as? String else {
       return title?.workTimelineSingleLine?.contains(" ") == true ? title : nil
     }
@@ -923,6 +943,10 @@ public extension AgentRunActivity {
   /// identifier: Claude Code's ToolSearch looks up the tools it may call,
   /// and its Skill tool loads a skill. Any other tool keeps its own name.
   var workTimelineHelper: WorkTimelineHelper? {
+    WorkTimelineMemo.shared.derived(self, \.helper) { workTimelineHelperWorkedOut }
+  }
+
+  private var workTimelineHelperWorkedOut: WorkTimelineHelper? {
     guard kind == .tool else { return nil }
     let input = workTimelineInput
     if workTimelineToolIdentity == "ToolSearch" {
@@ -1126,12 +1150,27 @@ public extension AgentRunActivity {
 }
 
 extension String {
+  /// The text, unless trimming its whitespace and newlines would leave
+  /// nothing; found without making the trimmed copy.
   var workTimelineNonempty: String? {
-    trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : self
+    let blank = CharacterSet.whitespacesAndNewlines
+    return unicodeScalars.contains { !blank.contains($0) } ? self : nil
   }
 
   /// Whitespace collapsed to single spaces, or nil when empty.
   var workTimelineSingleLine: String? {
+    // Already one line: printable ASCII with single spaces between words.
+    var afterSpace = true
+    var plain = true
+    for byte in utf8 {
+      if byte < 0x21 || byte > 0x7E {
+        guard byte == 0x20, !afterSpace else { plain = false; break }
+        afterSpace = true
+      } else {
+        afterSpace = false
+      }
+    }
+    if plain, !afterSpace { return self }
     let line = split(whereSeparator: \.isWhitespace).joined(separator: " ")
     return line.isEmpty ? nil : line
   }
@@ -1144,7 +1183,7 @@ extension String {
   /// text is cut, so no pattern ever reads a long command whole.
   var workTimelineRedactingCredentials: String {
     var text = count > Self.workTimelineShownLength ? String(prefix(Self.workTimelineShownLength)) + "\u{2026}" : self
-    for (pattern, template) in Self.workTimelineCredentialPatterns {
+    for (pattern, template, mark) in Self.workTimelineCredentialPatterns where text.utf8.contains(mark) {
       text = pattern.stringByReplacingMatches(in: text, range: NSRange(text.startIndex..., in: text), withTemplate: template)
     }
     return text
@@ -1167,14 +1206,19 @@ extension String {
   // Each pattern starts at a word or token boundary and inspects a name once.
   // `Basic` and `Bearer` are masked as part of an authorization header's
   // value, never on their own (`echo basic info`).
-  private static let workTimelineCredentialPatterns: [(NSRegularExpression, String)] = [
+  // Each comes with a character every match of it contains, so text
+  // without that character is not searched.
+  private static let workTimelineCredentialPatterns: [(NSRegularExpression, String, UInt8)] = [
     (#"(?i)\b(authorization|proxy-authorization|x-api-key|api-key|cookie)(\s*:\s*)(?:"(?:[^"\\]|\\.)*(?:"|\\?$)|'[^']*'?|[^'"“”\n]+)"#,
-     "$1$2…"),
-    (#"(?<!\S)(-u|--user)(\s+|=)(?:'[^':]*:[^']*'?|"(?:[^"\\:]|\\[^:])*\\?:(?:[^"\\]|\\.)*(?:"|\\?$)|[^\s'"]+:[^\s'"]+)"#, "$1$2…"),
-    (#"(?i)(?<!\S)(--?(?:[a-z0-9]+-)*"# + workTimelineCredentialName + #")(\s+)(?!-)"# + workTimelineCredentialValue, "$1$2…"),
-    (#"(?i)(?<![A-Za-z0-9_.-])((?:[A-Za-z0-9_.-]*[_.-])?"# + workTimelineCredentialName + ")=" + workTimelineCredentialValue, "$1=…"),
-    (#"(?i)\b([a-z][a-z0-9+.-]*://)[^/\s@?#]+@"#, "$1…@"),
-  ].map { (try! NSRegularExpression(pattern: $0.0), $0.1) }
+     "$1$2…", UInt8(ascii: ":")),
+    (#"(?<!\S)(-u|--user)(\s+|=)(?:'[^':]*:[^']*'?|"(?:[^"\\:]|\\[^:])*\\?:(?:[^"\\]|\\.)*(?:"|\\?$)|[^\s'"]+:[^\s'"]+)"#, "$1$2…",
+     UInt8(ascii: ":")),
+    (#"(?i)(?<!\S)(--?(?:[a-z0-9]+-)*"# + workTimelineCredentialName + #")(\s+)(?!-)"# + workTimelineCredentialValue, "$1$2…",
+     UInt8(ascii: "-")),
+    (#"(?i)(?<![A-Za-z0-9_.-])((?:[A-Za-z0-9_.-]*[_.-])?"# + workTimelineCredentialName + ")=" + workTimelineCredentialValue, "$1=…",
+     UInt8(ascii: "=")),
+    (#"(?i)\b([a-z][a-z0-9+.-]*://)[^/\s@?#]+@"#, "$1…@", UInt8(ascii: "@")),
+  ].map { (try! NSRegularExpression(pattern: $0.0), $0.1, $0.2) }
 }
 
 extension String {
@@ -1195,6 +1239,15 @@ extension String {
     pattern: #"^cd[ \t]+('[^']*'|"[^"]*"|[^\s;&]+)[ \t]*(&&|;|\r?\n)\s*"#)
   private static let workTimelineGitFolder = try! NSRegularExpression(
     pattern: #"\bgit\s+-C\s+('[^']*'|"[^"]*"|\S+)"#)
+  /// A `set` of shell options alone on its line.
+  private static let workTimelineShellOptions = try! NSRegularExpression(
+    pattern: #"^set(\s+[-+][A-Za-z]+(\s+[a-z]+)?)+$"#)
+  /// An interpreter fed a here-document, and one given its script inline.
+  private static let workTimelineHereDocument = try! NSRegularExpression(
+    pattern: #"^(python3?|node|ruby|bash|sh|zsh)(?: -)? *<<(-?) *(['"]?)([A-Za-z_][A-Za-z0-9_]*)\3$"#,
+    options: [.dotMatchesLineSeparators])
+  private static let workTimelineInlineScript = try! NSRegularExpression(
+    pattern: #"^(python3?|node|ruby|bash|sh|zsh) +(-[ce]) +'[^']*'$"#, options: [.dotMatchesLineSeparators])
 
   /// Absolute paths in the text, quoted or bare.
   var workTimelineAbsolutePaths: [String] {
@@ -1249,7 +1302,8 @@ extension String {
     }
     let doing = lines.filter { line in
       let text = line.trimmingCharacters(in: .whitespaces)
-      return !text.isEmpty && !text.hasPrefix("#") && text.range(of: #"^set(\s+[-+][A-Za-z]+(\s+[a-z]+)?)+$"#, options: .regularExpression) == nil
+      return !text.isEmpty && !text.hasPrefix("#")
+        && Self.workTimelineShellOptions.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)) == nil
     }
     guard let first = doing.first else { return workTimelineSingleLine ?? self }
     let shown = first.workTimelineDisplayCommand(root: root).workTimelineSingleLine ?? first
@@ -1267,15 +1321,14 @@ extension String {
     let languages = ["python": "Python", "python3": "Python", "node": "Node.js", "ruby": "Ruby",
                      "bash": "shell", "sh": "shell", "zsh": "shell"]
     let inlineFlag = ["python": "-c", "python3": "-c", "bash": "-c", "sh": "-c", "zsh": "-c", "node": "-e", "ruby": "-e"]
-    func match(_ pattern: String, _ text: String) -> [String]? {
-      guard let regex = try? NSRegularExpression(pattern: pattern, options: [.dotMatchesLineSeparators]),
-            let found = regex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)) else { return nil }
+    func match(_ regex: NSRegularExpression, _ text: String) -> [String]? {
+      guard let found = regex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)) else { return nil }
       return (0..<found.numberOfRanges).map { Range(found.range(at: $0), in: text).map { String(text[$0]) } ?? "" }
     }
     // Lines as the shell reads them: split at LF alone, so a CR stays in its line.
     let lines = command.components(separatedBy: "\n")
     if let first = lines.first,
-       let parts = match(#"^(python3?|node|ruby|bash|sh|zsh)(?: -)? *<<(-?) *(['"]?)([A-Za-z_][A-Za-z0-9_]*)\3$"#, first),
+       let parts = match(Self.workTimelineHereDocument, first),
        let language = languages[parts[1]],
        // The terminator is the delimiter alone on its line, after leading
        // tabs only with `<<-`, as the shell reads it.
@@ -1289,7 +1342,7 @@ extension String {
       }
       return (language, more)
     }
-    if let parts = match(#"^(python3?|node|ruby|bash|sh|zsh) +(-[ce]) +'[^']*'$"#, command), inlineFlag[parts[1]] == parts[2],
+    if let parts = match(Self.workTimelineInlineScript, command), inlineFlag[parts[1]] == parts[2],
        let language = languages[parts[1]] {
       return (language, false)
     }
@@ -1391,26 +1444,76 @@ extension WorkTimelineHelper.Kind {
 
 /// What the timeline remembers between rebuilds, which happen on every
 /// streamed update: each activity's decoded input, kept while its raw input
-/// is the same text, and each run's path anchor once decided.
+/// is the same text; what is worked out from each tool call (its identity,
+/// action, operation, command and helper), kept while the activity is the
+/// same apart from its place in the message window; and each run's path
+/// anchor once decided.
 private final class WorkTimelineMemo: @unchecked Sendable {
   static let shared = WorkTimelineMemo()
-  private static let limit = 4_096
+
+  /// What is worked out from one activity, each value once it is asked for.
+  final class Derived {
+    var activity: AgentRunActivity
+    var identity: String?
+    var action: ConversationToolAction?
+    var actionFromInput: ConversationToolAction?
+    var operation: ConversationShellOperation??
+    var titledCommand: String??
+    var helper: WorkTimelineHelper??
+    init(_ activity: AgentRunActivity) { self.activity = activity }
+  }
 
   private let lock = NSLock()
-  private var inputs: [String: (raw: String, value: [String: Any]?)] = [:]
-  private var anchors: [String: String?] = [:]
+  /// A generation of inputs or worked-out values holds at most this many
+  /// bytes of the activities it keeps: tool output can be large, and a chat
+  /// let go must not stay in memory through them.
+  private static let generationBytes = 16 * 1_024 * 1_024
+  private var inputs = WorkTimelineGenerations<String, (raw: String, value: [String: Any]?)>(
+    limit: 4_096, costLimit: WorkTimelineMemo.generationBytes)
+  private var derived = WorkTimelineGenerations<String, Derived>(
+    limit: 4_096, costLimit: WorkTimelineMemo.generationBytes)
+  /// Small, and promised never to change for a run once shown.
+  private var anchors = WorkTimelineGenerations<String, String?>(limit: 16_384)
 
   func input(id: String, raw: String) -> [String: Any]? {
     lock.lock()
-    if let kept = inputs[id], kept.raw == raw {
+    if let kept = inputs.value(id), kept.raw == raw {
       lock.unlock()
       return kept.value
     }
     lock.unlock()
     let value = (try? JSONSerialization.jsonObject(with: Data(raw.utf8))) as? [String: Any]
     lock.lock()
-    if inputs.count >= Self.limit { inputs.removeAll(keepingCapacity: true) }
-    inputs[id] = (raw, value)
+    // The text, and the decoded objects that are a few times its size.
+    inputs.insert(id, (raw, value), cost: 256 + 4 * raw.utf8.count)
+    lock.unlock()
+    return value
+  }
+
+  /// `field` of what is worked out from `activity`: the value kept for it,
+  /// else `workOut`'s, which is then kept. Never computed under the lock,
+  /// since working one value out asks for others.
+  func derived<Value>(_ activity: AgentRunActivity, _ field: ReferenceWritableKeyPath<Derived, Value?>,
+                      workOut: () -> Value) -> Value {
+    lock.lock()
+    let entry: Derived
+    if let kept = derived.value(activity.id), kept.activity.sameIgnoringPosition(activity) {
+      // The same activity moved by a page of older items: compare the copy at
+      // hand from now on, which is quicker while it lasts.
+      if kept.activity.position != activity.position { kept.activity = activity }
+      entry = kept
+    } else {
+      entry = Derived(activity)
+      derived.insert(activity.id, entry, cost: activity.workTimelineRetainedBytes)
+    }
+    if let value = entry[keyPath: field] {
+      lock.unlock()
+      return value
+    }
+    lock.unlock()
+    let value = workOut()
+    lock.lock()
+    entry[keyPath: field] = value
     lock.unlock()
     return value
   }
@@ -1418,7 +1521,7 @@ private final class WorkTimelineMemo: @unchecked Sendable {
   /// The run's anchor: the one first decided, else `decide`'s once it has one.
   func anchor(run: String, decide: () -> String??) -> String? {
     lock.lock()
-    if let kept = anchors[run] {
+    if let kept = anchors.value(run) {
       lock.unlock()
       return kept
     }
@@ -1426,9 +1529,95 @@ private final class WorkTimelineMemo: @unchecked Sendable {
     guard let decided = decide() else { return nil }
     lock.lock()
     defer { lock.unlock() }
-    if let kept = anchors[run] { return kept }
-    if anchors.count >= Self.limit { anchors.removeAll(keepingCapacity: true) }
-    anchors[run] = decided
+    if let kept = anchors.value(run) { return kept }
+    anchors.insert(run, decided)
     return decided
+  }
+}
+
+/// Values kept in two generations: when the newer is full, by its count or
+/// by the bytes its values hold, it becomes the older and the older is let
+/// go, and a value read from the older moves to the newer. What is still in
+/// use stays; what is not goes, without a point at which everything is
+/// forgotten at once, and the two never hold much more than twice a
+/// generation's bytes.
+struct WorkTimelineGenerations<Key: Hashable, Value> {
+  let limit: Int
+  /// The bytes a generation holds before it is full (as each value's
+  /// `cost` estimates them).
+  let costLimit: Int
+  private var newer: [Key: (value: Value, cost: Int)] = [:]
+  private var older: [Key: (value: Value, cost: Int)] = [:]
+  private var newerCost = 0
+  private var olderCost = 0
+
+  init(limit: Int, costLimit: Int = .max) {
+    self.limit = limit
+    self.costLimit = costLimit
+  }
+
+  /// The bytes both generations hold, as estimated.
+  var cost: Int { newerCost + olderCost }
+
+  mutating func value(_ key: Key) -> Value? {
+    if let kept = newer[key] { return kept.value }
+    guard let kept = older.removeValue(forKey: key) else { return nil }
+    olderCost -= kept.cost
+    insert(key, kept.value, cost: kept.cost)
+    return kept.value
+  }
+
+  /// Keeps `value`, which holds about `cost` bytes, in place of any value kept for `key`.
+  /// A value larger than a whole generation is not kept: whoever needs it
+  /// works it out again.
+  mutating func insert(_ key: Key, _ value: Value, cost: Int = 0) {
+    if let stale = older.removeValue(forKey: key) { olderCost -= stale.cost }
+    if let replaced = newer.removeValue(forKey: key) { newerCost -= replaced.cost }
+    guard cost <= costLimit else { return }
+    if !newer.isEmpty, newer.count >= limit || newerCost + cost > costLimit {
+      older = newer
+      olderCost = newerCost
+      newer = [:]
+      newerCost = 0
+    }
+    newer[key] = (value, cost)
+    newerCost += cost
+  }
+}
+
+/// Text compared and hashed by its exact UTF-8 bytes. `String` equality is
+/// canonical equivalence ("é" equals "e" and a combining acute), which a key
+/// must not use when what is kept for it depends on the bytes.
+struct WorkTimelineExactText: Hashable {
+  let text: String
+
+  init(_ text: String) { self.text = text }
+
+  static func == (lhs: Self, rhs: Self) -> Bool {
+    lhs.text.utf8.count == rhs.text.utf8.count && lhs.text.utf8.elementsEqual(rhs.text.utf8)
+  }
+
+  func hash(into hasher: inout Hasher) {
+    hasher.combine(text.utf8.count)
+    if text.utf8.withContiguousStorageIfAvailable({ hasher.combine(bytes: UnsafeRawBufferPointer($0)) }) == nil {
+      for byte in text.utf8 { hasher.combine(byte) }
+    }
+  }
+}
+
+extension AgentRunActivity {
+  /// About how many bytes a kept copy of the activity holds: its texts, raw
+  /// payloads, file changes and subagents' words.
+  var workTimelineRetainedBytes: Int {
+    let texts = [title, detail, status, toolName, content, rawInputJSON, rawOutputJSON, rawPayloadJSON]
+      .reduce(0) { $0 + ($1?.utf8.count ?? 0) }
+    let changed = changes.reduce(0) { total, change in
+      total + change.path.utf8.count + (change.oldText?.utf8.count ?? 0) + change.newText.utf8.count
+        + (change.unifiedDiff?.utf8.count ?? 0)
+    }
+    let delegated = (subagents ?? []).reduce(0) { total, child in
+      total + [child.task, child.result, child.detail].reduce(0) { $0 + ($1?.utf8.count ?? 0) }
+    }
+    return 512 + texts + changed + delegated
   }
 }

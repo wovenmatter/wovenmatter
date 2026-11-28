@@ -392,6 +392,8 @@ func aChoiceDuringATurnIsTakenAtOnceOrRefusedAtOnce() async throws {
 func aReopenedSessionOffersItsRuntimesOptionsBeforeTheRuntimeStarts() async throws {
   let first = try await TestMachine.start(runtime: PickyRuntime())
   let session = try await (try await first.connect()).call(CreateSession(runtime: PickyRuntime.kind, title: "Chat"))
+  // The runtime starts once the session is created, and reports its options.
+  while first.server.sessions.configurations.configuration(PickyRuntime.kind) == nil { try await Task.sleep(for: .milliseconds(5)) }
   await first.server.stop()
 
   let runtime = PickyRuntime()
@@ -417,6 +419,8 @@ func aPermissionTheRuntimeTakesOnlyAtStartRestartsItWithTheNewMode() async throw
   defer { machine.server.stopLater() }
   let client = try await machine.connect()
   let session = try await client.call(CreateSession(runtime: PickyRuntime.kind, title: "Chat"))
+  // The runtime starts once the session is created.
+  while runtime.state.withLock({ $0.opened }) == 0 { try await Task.sleep(for: .milliseconds(5)) }
   #expect(runtime.state.withLock { $0.opened } == 1)
 
   let changed = try await client.call(ConfigureSession(sessionID: session.id, permission: "auto"))
