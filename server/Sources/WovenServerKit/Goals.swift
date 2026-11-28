@@ -52,7 +52,7 @@ enum Goals {
     if let value {
       // A turn already running is not steered; it continues toward the goal when it ends.
       do {
-        try await host.send(value, attachments: [], delivered: start(value), steers: false)
+        try await host.send(value, attachments: [], delivered: start(value), steers: false, goal: value)
       } catch let error as ProtocolError where error.code == .busy {}
     }
     guard let session = try await library.session(sessionID) else { throw ProtocolError(.notFound, "No session \(sessionID).") }

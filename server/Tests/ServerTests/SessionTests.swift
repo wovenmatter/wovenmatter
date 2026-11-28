@@ -125,7 +125,9 @@ func aNewSessionWithNoSavedChoicesShowsWhatItsRuntimeStartsWithBeforeItOpens() a
   let first = try await TestServer.start(runtime: StandInRuntime(store: store))
   let earlier = try await first.connect()
   _ = try await earlier.call(CreateSession(runtime: StandInRuntime.kind, title: "First"))
-  try await waitUntil { store.started == 1 }
+  // Kept once the open has settled, before the server stops.
+  let kept = first.folder.appendingPathComponent("scratch/runtime-start-choices.json")
+  try await waitUntil { FileManager.default.fileExists(atPath: kept.path) }
   await first.server.stop()
 
   // After a restart, the next one shows it while its runtime is still held.
@@ -207,7 +209,8 @@ func aRuntimeThatOpensAsItsSessionIsDeletedOrItsServerStopsIsStopped() async thr
   let deleted = try await client.call(CreateSession(runtime: StandInRuntime.kind, title: "Deleted"))
   try await waitUntil { await opening.waiting == 1 }
   let deletion = Task { try await client.call(DeleteSession(sessionID: deleted.id)) }
-  try await Task.sleep(for: .milliseconds(100))
+  // Room for the deletion to reach the opening before it is let through.
+  try await Task.sleep(for: .milliseconds(500))
   await opening.open()
   _ = try await deletion.value
   #expect(store.started == 1 && store.running == 0)

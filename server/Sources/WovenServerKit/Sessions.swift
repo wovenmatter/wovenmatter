@@ -52,8 +52,10 @@ final class RuntimeConfigurations: Sendable {
   /// Kept on disk, so Settings can offer a runtime's options after a restart.
   private let file: URL?
   private let levelsFile: URL?
-  /// What each runtime starts a new session with when given no choices.
-  private let starts: Mutex<[RuntimeKind: StartChoices]>
+  /// What each runtime starts a new session with when given no choices, by
+  /// place (`SessionHost.place`): a runtime can read its defaults from a
+  /// project's own settings.
+  private let starts: Mutex<[RuntimeKind: [String: StartChoices]]>
   private let startsFile: URL?
 
   init(file: URL? = nil) {
@@ -62,7 +64,7 @@ final class RuntimeConfigurations: Sendable {
     startsFile = file?.deletingLastPathComponent().appendingPathComponent("runtime-start-choices.json")
     known = Mutex(Self.read(file, as: SessionConfiguration.self))
     levels = Mutex(Self.read(levelsFile, as: [String: [SessionOption]].self))
-    starts = Mutex(Self.read(startsFile, as: StartChoices.self))
+    starts = Mutex(Self.read(startsFile, as: [String: StartChoices].self))
   }
 
   func set(_ kind: RuntimeKind, _ configuration: SessionConfiguration) {
@@ -86,21 +88,21 @@ final class RuntimeConfigurations: Sendable {
 
   func configuration(_ kind: RuntimeKind) -> SessionConfiguration? { known.withLock { $0[kind] } }
 
-  /// What a runtime starts a new session with when given no choices: its own
-  /// defaults on this machine, as it reported them when it last did.
-  func setStartChoices(_ kind: RuntimeKind, _ choices: SessionChoices) {
-    guard !choices.isEmpty else { return }
+  /// What a runtime starts a new session with in `place` when given no
+  /// choices: its own defaults there, as it reported them when it last did,
+  /// none included.
+  func setStartChoices(_ kind: RuntimeKind, place: String, _ choices: SessionChoices) {
     let saved = StartChoices(model: choices.model, thinking: choices.thinking, permission: choices.permission)
-    let all = starts.withLock { starts -> [RuntimeKind: StartChoices]? in
-      guard starts[kind] != saved else { return nil }
-      starts[kind] = saved
-      return starts
+    // Written under the lock, so two runtimes' first starts can't save out of order.
+    starts.withLock { starts in
+      guard starts[kind]?[place] != saved else { return }
+      starts[kind, default: [:]][place] = saved
+      Self.write(starts, to: startsFile)
     }
-    if let all { Self.write(all, to: startsFile) }
   }
 
-  func startChoices(_ kind: RuntimeKind) -> SessionChoices? {
-    starts.withLock { $0[kind] }.map { SessionChoices(model: $0.model, thinking: $0.thinking, permission: $0.permission) }
+  func startChoices(_ kind: RuntimeKind, place: String) -> SessionChoices? {
+    starts.withLock { $0[kind]?[place] }.map { SessionChoices(model: $0.model, thinking: $0.thinking, permission: $0.permission) }
   }
 
   private struct StartChoices: Codable, Hashable, Sendable {
@@ -284,6 +286,10 @@ actor SessionHost {
   /// waits for, so it opens once (`openLive`).
   private var opening: Opening?
   private var openings = 0
+  /// Where the session works, as what a runtime starts with there is kept
+  /// (`RuntimeConfigurations.startChoices`): its folder, or "" for a scratch
+  /// directory of its own, whose defaults are the runtime's alone.
+  private var place: String?
   /// Its manager has let it go (`stop`, `end`), so its runtime never starts
   /// again: nothing would stop it.
   private var closed = false
@@ -366,6 +372,7 @@ actor SessionHost {
     continuation.onTermination = { [weak self] _ in Task { await self?.unsubscribe(id) } }
     configuration.goal = session.goal
     saved = SessionChoices(model: session.model, thinking: session.thinking, permission: session.permission)
+    place = Self.place(of: session)
     return (SessionSnapshot(session: session, items: items, inProgress: inProgress, run: run, prompts: prompts,
                             configuration: shown), events)
   }
@@ -382,7 +389,8 @@ actor SessionHost {
   private func shown(withStartChoices: Bool) -> SessionConfiguration {
     var shown = configuration
     if live == nil {
-      let starts = withStartChoices ? configurations.startChoices(runtime.kind) : nil
+      // Only with no choice saved at all: a saved model can start with other levels.
+      let starts = withStartChoices && saved.isEmpty ? place.flatMap { configurations.startChoices(runtime.kind, place: $0) } : nil
       shown.model = shown.model ?? saved.model ?? starts?.model
       shown.thinking = shown.thinking ?? saved.thinking ?? starts?.thinking
       shown.permission = shown.permission ?? saved.permission ?? starts?.permission
@@ -408,8 +416,10 @@ actor SessionHost {
   /// is what the runtime is sent in place of `text`, which is what is saved.
   /// A message sent while a turn runs steers that turn; with `steers` false
   /// it is refused as busy instead.
+  /// `goal` is the goal a turn toward it is for: it is not sent once that
+  /// goal is no longer the session's.
   func send(_ text: String, attachments: [Attachment], author: ItemAuthor? = nil, delivered override: String? = nil,
-            steers: Bool = true) async throws {
+            steers: Bool = true, goal: String? = nil) async throws {
     // Sends go one at a time, through their saves, while a steer frees the
     // lane for the runtime's reply.
     await enterSending()
@@ -432,8 +442,8 @@ actor SessionHost {
     if live == nil, run == .idle {
       _ = try await openLive(lettingGo: true)
       guard try goes() else { return }
-      // A goal cleared meanwhile has nothing more to send.
-      if continuesGoal, (try await library.session(sessionID)?.goal ?? "").isEmpty { return }
+      // A goal cleared or replaced meanwhile has nothing more to send toward it.
+      if let goal, try await library.session(sessionID)?.goal != goal { return }
     }
     var files: [TurnAttachment] = []
     for attachment in attachments {
@@ -557,7 +567,7 @@ actor SessionHost {
           let goal = try? await library.session(sessionID)?.goal, !goal.isEmpty else { return }
     Task { [weak self] in
       try? await self?.send(Goals.continuedText, attachments: [], author: Goals.author, delivered: Goals.continuation(goal),
-                            steers: false)
+                            steers: false, goal: goal)
     }
   }
 
@@ -835,7 +845,12 @@ actor SessionHost {
     /// A new native session given no choices: what it reports is the
     /// runtime's own start (`RuntimeConfigurations.startChoices`).
     let startsBare: Bool
+    let place: String
     let task: Task<any RuntimeSession, any Error>
+  }
+
+  private static func place(of session: Session) -> String {
+    session.folderID ?? (URL(fileURLWithPath: session.directory).lastPathComponent == session.id ? "" : session.directory)
   }
 
   /// The live native session, opening or resuming it when needed. When the
@@ -875,6 +890,7 @@ actor SessionHost {
     if let opening { return opening }
     guard !closed else { throw Self.closedError }
     guard let session = try await library.session(sessionID) else { throw ProtocolError(.notFound, "No session \(sessionID).") }
+    place = Self.place(of: session)
     let native = try await library.nativeSession(for: sessionID)
     lastSequence = try await library.items(sessionID: sessionID, beforeSequence: .max, limit: 1).last?.sequence ?? 0
     var directory = session.directory
@@ -886,7 +902,7 @@ actor SessionHost {
                              tools: tools)
     let runtime = runtime, library = library, sessionID = sessionID
     openings += 1
-    let opening = Opening(number: openings, handle: native?.handle, startsBare: native?.handle == nil && choices.isEmpty, task: Task {
+    let opening = Opening(number: openings, handle: native?.handle, startsBare: native?.handle == nil && choices.isEmpty, place: Self.place(of: session), task: Task {
       do {
         return try await runtime.open(start)
       } catch RuntimeError.nativeSessionGone {
@@ -950,8 +966,8 @@ actor SessionHost {
     let reported = await opened.configuration
     adopt(reported)
     if opening.startsBare {
-      configurations.setStartChoices(runtime.kind, SessionChoices(model: reported.model, thinking: reported.thinking,
-                                                                  permission: reported.permission))
+      configurations.setStartChoices(runtime.kind, place: opening.place,
+                                     SessionChoices(model: reported.model, thinking: reported.thinking, permission: reported.permission))
     }
     await saveChoices()
     broadcast(.configuration(shown))

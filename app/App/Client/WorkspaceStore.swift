@@ -173,10 +173,15 @@ final class WorkspaceStore {
             guard number > shownRefresh else { return }
             shownRefresh = number
             let listed = Set(sessions.map(\.id))
-            // Kept until listed, or for a minute: one trashed or deleted on its
-            // machine before it reached this Mac is never listed.
+            // Kept until listed, or for a minute while its machine syncs with
+            // this one: one trashed or deleted on its machine before it reached
+            // this Mac is never listed. One whose machine can't sync right now
+            // stays, served by its owner.
             let kept = Date().addingTimeInterval(-60)
-            unlistedSessions.removeAll { listed.contains($0.session.id) || $0.started < kept }
+            unlistedSessions.removeAll { unlisted in
+                listed.contains(unlisted.session.id)
+                    || (unlisted.started < kept && machines?.machine(id: unlisted.session.machineID)?.syncs != false)
+            }
             let overview = WorkspaceOverview(
                 folders: folders.map { folder in
                     WorkspaceFolderRecord(id: folder.id, name: folder.name, icon: nil, position: folder.position,

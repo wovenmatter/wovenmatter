@@ -49,6 +49,9 @@ final class SessionStore {
         return settings
     }
     private var reported: SessionSettings?
+    /// The runtime is opening for the first time on its machine, so its
+    /// options are still to come (`SessionConfiguration.awaitingOptions`).
+    private(set) var optionsLoading = false
     /// Choices sent to the owner that it has not answered yet.
     private var requested = SessionSettingsChange()
     /// The last change sent; each waits for the one before, and a send waits for all.
@@ -208,7 +211,8 @@ final class SessionStore {
 
     /// Pages in older messages from the owner's server while it can be
     /// reached, else from this Mac's, whose library has what has synced.
-    /// Returns whether any arrived.
+    /// Returns whether there may be more to page in: some arrived, or the
+    /// items were replaced meanwhile.
     @discardableResult
     func loadOlderMessages() async -> Bool {
         let fromOwner = isOwnerReachable
@@ -219,8 +223,9 @@ final class SessionStore {
         do {
             let older = try await source.call(SessionItems(sessionID: sessionID, beforeSequence: oldest, limit: Self.pageSize))
             // A snapshot that replaced the items meanwhile starts elsewhere: this
-            // page would leave a gap above it.
-            guard items.map(\.sequence).min() == oldest else { return false }
+            // page would leave a gap above it, so it is dropped and the caller
+            // pages on from where the items start now.
+            guard items.map(\.sequence).min() == oldest else { return true }
             let known = Set(items.map(\.id))
             items = older.filter { !known.contains($0.id) } + items
             // Only the owner has them all; this Mac's library may not have them yet.
@@ -653,11 +658,9 @@ final class SessionStore {
 
     private func apply(_ configuration: SessionConfiguration) {
         // A runtime opening for the first time on its machine has no options
-        // to show yet: they load, rather than read as none.
-        guard configuration.awaitingOptions != true else {
-            reported = nil
-            return
-        }
+        // to show yet: they load, rather than read as none, beside the choices
+        // already saved.
+        optionsLoading = configuration.awaitingOptions == true
         func metadata(_ options: [SessionOption]) -> [String: SessionOptionMetadata] {
             Dictionary(options.map { ($0.id, SessionOptionMetadata(name: $0.name, description: $0.detail)) },
                        uniquingKeysWith: { first, _ in first })

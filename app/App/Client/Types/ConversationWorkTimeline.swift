@@ -1568,11 +1568,13 @@ struct WorkTimelineGenerations<Key: Hashable, Value> {
   }
 
   /// Keeps `value`, which holds about `cost` bytes, in place of any value kept for `key`.
+  /// A value larger than a whole generation is not kept: whoever needs it
+  /// works it out again.
   mutating func insert(_ key: Key, _ value: Value, cost: Int = 0) {
     if let stale = older.removeValue(forKey: key) { olderCost -= stale.cost }
-    if let replaced = newer.removeValue(forKey: key) {
-      newerCost -= replaced.cost
-    } else if !newer.isEmpty, newer.count >= limit || newerCost + cost > costLimit {
+    if let replaced = newer.removeValue(forKey: key) { newerCost -= replaced.cost }
+    guard cost <= costLimit else { return }
+    if !newer.isEmpty, newer.count >= limit || newerCost + cost > costLimit {
       older = newer
       olderCost = newerCost
       newer = [:]

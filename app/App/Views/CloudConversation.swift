@@ -382,8 +382,11 @@ struct CloudConversation: View {
         let actions = rowActions
         guard !actions.isRetired else { return actions }
         actions.openAttachment = { attachment in openAttachment(attachment) }
+        // Only the library, never this view: a file dragged out finishes resolving
+        // after its panel has closed (`retire` keeps it).
+        let library = model.library
         actions.resolveFile = { libraryItemID, source in
-            try await model.library.fileURL(id: WorkspaceLibraryItem.identifier(messageID: libraryItemID, source: source))
+            try await library.fileURL(id: WorkspaceLibraryItem.identifier(messageID: libraryItemID, source: source))
         }
         actions.newSession = { onNewSession?() }
         actions.transcriptInteraction = {
@@ -477,7 +480,7 @@ struct CloudConversation: View {
                 .accessibilityIdentifier("remote-conversation-offline")
         }
         if let conversation, !conversation.isArchived, conversation.runtimeKind == .defaultAgent,
-           session?.settings?.selectableModels.isEmpty == true {
+           session?.settings?.selectableModels.isEmpty == true, session?.optionsLoading != true {
             Button {
                 model.navigation.pendingDefaultAgentSettingsScope =
                     model.connections.settings.machines[conversation.machineID] == nil ? "global" : conversation.machineID
@@ -524,7 +527,7 @@ struct CloudConversation: View {
             supportsGoals: WorkspaceGoal.supports(conversation?.runtimeKind),
             showsSessionControls: hasRuntime,
             showsPermissionControl: hasRuntime,
-            sessionMetadataLoading: hasRuntime && session?.settings == nil,
+            sessionMetadataLoading: hasRuntime && (session?.settings == nil || session?.optionsLoading == true),
             sessionMetadata: hasRuntime ? session?.settings : nil,
             sessionControlsDisabled: !hasRuntime || isReadOnly,
             sendDisabled: sendInProgress || (conversation != nil && (isReadOnly || !hasRuntime)),
@@ -969,7 +972,6 @@ final class ConversationRowActions {
     func retire() {
         isRetired = true
         openAttachment = { _ in }
-        resolveFile = { _, _ in throw CancellationError() }
         newSession = {}
         transcriptInteraction = {}
         activityDetails = { _, _ in nil }
