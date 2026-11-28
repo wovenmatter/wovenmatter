@@ -527,7 +527,9 @@ struct CloudConversation: View {
             availableFolders: conversation.map { model.workspace.folders(on: $0.machineID) } ?? [],
             selectedFolderID: conversation?.folderID,
             folderMachineID: conversation?.machineID,
-            folderSelectionDisabled: isReadOnly || choosingFolder || sendInProgress || session?.hasUserMessage != false,
+            // This Mac's server moves it, once its library holds the chat.
+            folderSelectionDisabled: isReadOnly || choosingFolder || sendInProgress || session?.hasUserMessage != false
+                || model.workspace.isArriving(conversation?.id),
             onSelectFolder: { folderID in
                 guard let session, !isReadOnly, !choosingFolder else { return }
                 choosingFolder = true

@@ -154,8 +154,13 @@ final class WorkspaceStore {
     }
 
     /// Asks the server for the whole overview again (File > Refresh Workspace).
+    /// Of reads that overlap, only the one started last is shown, and only
+    /// when it differs from what shows, so a late answer never replaces a
+    /// newer one and an unchanged list redraws nothing.
     func refresh() async {
         guard let server else { return }
+        refreshes += 1
+        let number = refreshes
         do {
             // Asked together: the sidebar waits for the slowest of the three, not their sum.
             async let listedFolders = server.call(ListFolders())
@@ -165,17 +170,36 @@ final class WorkspaceStore {
             // Bot chats and Forum rooms show only in the bots' own surfaces.
             let sessions = try await listedSessions.filter { $0.runtime != .bots }
             let notes = await listedNotes
-            workspaceOverview = WorkspaceOverview(
+            guard number == refreshes else { return }
+            let listed = Set(sessions.map(\.id))
+            unlistedSessions.removeAll { listed.contains($0.id) }
+            let overview = WorkspaceOverview(
                 folders: folders.map { folder in
                     WorkspaceFolderRecord(id: folder.id, name: folder.name, icon: nil, position: folder.position,
                                           isPinned: folder.pinned, machineID: folder.machineID, rootPath: folder.path,
                                           managedRoot: folder.managed, referencePaths: folder.references)
                 },
-                conversations: sessions.map(record),
+                conversations: (unlistedSessions + sessions).map(record),
                 notes: notes?.map(Self.noteRecord) ?? workspaceOverview?.notes ?? [])
+            if overview != workspaceOverview { workspaceOverview = overview }
         } catch {
+            guard number == refreshes else { return }
             folderMutationError = error.localizedDescription
         }
+    }
+    /// Reads of the overview started so far, which tells the latest.
+    @ObservationIgnored private var refreshes = 0
+
+    /// Sessions started here that this Mac's library does not list yet,
+    /// newest first: one on another machine reaches it by sync. Each shows
+    /// from its owner's reply until then, so the chat, its machine, folder
+    /// and composer are there at once. A command this Mac's server would
+    /// carry out on it waits until it is listed (`isArriving`).
+    private var unlistedSessions: [Session] = []
+
+    /// The session was started here and this Mac's library does not list it yet.
+    func isArriving(_ sessionID: String?) -> Bool {
+        unlistedSessions.contains { $0.id == sessionID }
     }
 
     private func record(_ session: Session) -> WorkspaceConversationRecord {
@@ -205,16 +229,26 @@ final class WorkspaceStore {
         try await startSession(runtime: agent.runtimeKind.runtime, on: agent.machineID, folderID: folderID)
     }
 
-    /// Starts a session with any runtime the machine's server offers.
+    /// Starts a session with any runtime the machine's server offers. It
+    /// shows at once, from the owner's reply, and the overview is read again
+    /// meanwhile.
     func startSession(runtime: RuntimeKind, on machineID: String, folderID: String?) async throws -> String {
         let session = try await server(for: machineID).call(CreateSession(runtime: runtime, title: "New Chat", folderID: folderID))
-        await refresh()
+        if workspaceOverview?.conversations.contains(where: { $0.id == session.id }) != true {
+            unlistedSessions.insert(session, at: 0)
+            workspaceOverview?.conversations.insert(record(session), at: 0)
+        }
+        Task { await refresh() }
         return session.id
     }
 
     /// Sessions sync newest-wins, so this Mac's server writes these whichever
     /// machine owns the session; the owner's server takes them in by sync.
+    /// One this Mac's library does not hold yet is refused until it does.
     func mutateConversation(id: String, mutation: WorkspaceConversationMutation) async throws {
+        guard !isArriving(id) else {
+            throw ProtocolError(.busy, "This chat is still on its way to this Mac. Try again in a moment.")
+        }
         let server = try server(for: nil)
         switch mutation {
         case .setPinned(let pinned): _ = try await server.call(UpdateSession(sessionID: id, pinned: pinned))

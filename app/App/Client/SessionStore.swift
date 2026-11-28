@@ -78,6 +78,10 @@ final class SessionStore {
     private var owner: ServerConnection?
     /// The owner a `notOwner` refusal named, when the library said otherwise.
     @ObservationIgnored private var namedOwnerID: String?
+    /// The machine that owns the session, once known: from the workspace's
+    /// record of it, which a chat started here has from its owner's reply,
+    /// or from the owner's snapshot. A session never moves, so it is kept.
+    @ObservationIgnored private var ownerID: String?
     @ObservationIgnored private weak var workspace: WorkspaceStore?
 
     init(sessionID: String) {
@@ -141,9 +145,11 @@ final class SessionStore {
         isFollowing = false
     }
 
-    /// The owner's connection: the machine the library names, or the one a refusal named.
+    /// The owner's connection: the machine the session is known to run on, or
+    /// the one a refusal named.
     private func ownerConnection() -> ServerConnection? {
-        workspace?.ownerConnection(ofSession: sessionID, ownerID: namedOwnerID)
+        if ownerID == nil { ownerID = workspace?.conversation(id: sessionID)?.machineID }
+        return workspace?.ownerConnection(ofSession: sessionID, ownerID: namedOwnerID ?? ownerID)
     }
 
     /// Leaves the live view for the saved items, once each time the owner is lost.
@@ -190,17 +196,22 @@ final class SessionStore {
         hasLoaded = true
     }
 
-    /// Pages in older messages from this Mac's server. Returns whether any arrived.
+    /// Pages in older messages from the owner's server while it can be
+    /// reached, else from this Mac's, whose library has what has synced.
+    /// Returns whether any arrived.
     @discardableResult
     func loadOlderMessages() async -> Bool {
-        guard let server, let oldest = items.map(\.sequence).min(), oldest > 1, !isLoadingOlderMessages else { return false }
+        let fromOwner = isOwnerReachable
+        guard let source = fromOwner ? owner : server, let oldest = items.map(\.sequence).min(), oldest > 1,
+              !isLoadingOlderMessages else { return false }
         isLoadingOlderMessages = true
         defer { isLoadingOlderMessages = false }
         do {
-            let older = try await server.call(SessionItems(sessionID: sessionID, beforeSequence: oldest, limit: Self.pageSize))
+            let older = try await source.call(SessionItems(sessionID: sessionID, beforeSequence: oldest, limit: Self.pageSize))
             let known = Set(items.map(\.id))
             items = older.filter { !known.contains($0.id) } + items
-            if older.isEmpty { noOlderItems = true }
+            // Only the owner has them all; this Mac's library may not have them yet.
+            if older.isEmpty && fromOwner { noOlderItems = true }
             project()
             return !older.isEmpty
         } catch {
@@ -430,6 +441,7 @@ final class SessionStore {
         readyEnds = [:]
         prompts = snapshot.prompts
         runtime = snapshot.session.runtime
+        if namedOwnerID == nil { ownerID = snapshot.session.machineID }
         run = snapshot.run
         applyGoal(snapshot.session.goal)
         apply(snapshot.configuration)
@@ -609,6 +621,12 @@ final class SessionStore {
     private static func replyID(_ runID: String) -> String { "reply-" + runID }
 
     private func apply(_ configuration: SessionConfiguration) {
+        // A runtime opening for the first time on its machine has no options
+        // to show yet: they load, rather than read as none.
+        guard configuration.awaitingOptions != true else {
+            reported = nil
+            return
+        }
         func metadata(_ options: [SessionOption]) -> [String: SessionOptionMetadata] {
             Dictionary(options.map { ($0.id, SessionOptionMetadata(name: $0.name, description: $0.detail)) },
                        uniquingKeysWith: { first, _ in first })
