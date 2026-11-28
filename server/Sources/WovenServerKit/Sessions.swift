@@ -52,12 +52,17 @@ final class RuntimeConfigurations: Sendable {
   /// Kept on disk, so Settings can offer a runtime's options after a restart.
   private let file: URL?
   private let levelsFile: URL?
+  /// What each runtime starts a new session with when given no choices.
+  private let starts: Mutex<[RuntimeKind: StartChoices]>
+  private let startsFile: URL?
 
   init(file: URL? = nil) {
     self.file = file
     levelsFile = file?.deletingLastPathComponent().appendingPathComponent("runtime-thinking-levels.json")
+    startsFile = file?.deletingLastPathComponent().appendingPathComponent("runtime-start-choices.json")
     known = Mutex(Self.read(file, as: SessionConfiguration.self))
     levels = Mutex(Self.read(levelsFile, as: [String: [SessionOption]].self))
+    starts = Mutex(Self.read(startsFile, as: StartChoices.self))
   }
 
   func set(_ kind: RuntimeKind, _ configuration: SessionConfiguration) {
@@ -80,6 +85,29 @@ final class RuntimeConfigurations: Sendable {
   }
 
   func configuration(_ kind: RuntimeKind) -> SessionConfiguration? { known.withLock { $0[kind] } }
+
+  /// What a runtime starts a new session with when given no choices: its own
+  /// defaults on this machine, as it reported them when it last did.
+  func setStartChoices(_ kind: RuntimeKind, _ choices: SessionChoices) {
+    guard !choices.isEmpty else { return }
+    let saved = StartChoices(model: choices.model, thinking: choices.thinking, permission: choices.permission)
+    let all = starts.withLock { starts -> [RuntimeKind: StartChoices]? in
+      guard starts[kind] != saved else { return nil }
+      starts[kind] = saved
+      return starts
+    }
+    if let all { Self.write(all, to: startsFile) }
+  }
+
+  func startChoices(_ kind: RuntimeKind) -> SessionChoices? {
+    starts.withLock { $0[kind] }.map { SessionChoices(model: $0.model, thinking: $0.thinking, permission: $0.permission) }
+  }
+
+  private struct StartChoices: Codable, Hashable, Sendable {
+    var model: String?
+    var thinking: String?
+    var permission: String?
+  }
 
   /// The thinking levels `model` last offered, if it has been seen.
   func thinkingLevels(_ kind: RuntimeKind, model: String) -> [SessionOption]? {
@@ -347,12 +375,17 @@ actor SessionHost {
   /// choices and the options it last reported on this machine stand in, so
   /// the choices can be changed before it starts. While it opens for the
   /// first time on this machine there are none yet, and views are told so.
-  private var shown: SessionConfiguration {
+  /// With no saved choice, what the runtime starts a new session with on
+  /// this machine stands in, as it last reported it.
+  private var shown: SessionConfiguration { shown(withStartChoices: true) }
+
+  private func shown(withStartChoices: Bool) -> SessionConfiguration {
     var shown = configuration
     if live == nil {
-      shown.model = shown.model ?? saved.model
-      shown.thinking = shown.thinking ?? saved.thinking
-      shown.permission = shown.permission ?? saved.permission
+      let starts = withStartChoices ? configurations.startChoices(runtime.kind) : nil
+      shown.model = shown.model ?? saved.model ?? starts?.model
+      shown.thinking = shown.thinking ?? saved.thinking ?? starts?.thinking
+      shown.permission = shown.permission ?? saved.permission ?? starts?.permission
       if let known = configurations.configuration(runtime.kind) {
         if shown.models.isEmpty { shown.models = known.models }
         if shown.thinkingLevels.isEmpty {
@@ -799,6 +832,9 @@ actor SessionHost {
   private struct Opening {
     let number: Int
     let handle: String?
+    /// A new native session given no choices: what it reports is the
+    /// runtime's own start (`RuntimeConfigurations.startChoices`).
+    let startsBare: Bool
     let task: Task<any RuntimeSession, any Error>
   }
 
@@ -850,7 +886,7 @@ actor SessionHost {
                              tools: tools)
     let runtime = runtime, library = library, sessionID = sessionID
     openings += 1
-    let opening = Opening(number: openings, handle: native?.handle, task: Task {
+    let opening = Opening(number: openings, handle: native?.handle, startsBare: native?.handle == nil && choices.isEmpty, task: Task {
       do {
         return try await runtime.open(start)
       } catch RuntimeError.nativeSessionGone {
@@ -911,7 +947,12 @@ actor SessionHost {
     // It started with the saved choices, pending ones included. Whatever it
     // did not take is what is saved and shown now.
     pending = SessionChoices()
-    adopt(await opened.configuration)
+    let reported = await opened.configuration
+    adopt(reported)
+    if opening.startsBare {
+      configurations.setStartChoices(runtime.kind, SessionChoices(model: reported.model, thinking: reported.thinking,
+                                                                  permission: reported.permission))
+    }
     await saveChoices()
     broadcast(.configuration(shown))
     Task { [weak self] in
@@ -1003,7 +1044,8 @@ actor SessionHost {
 
   /// Saves the choices shown, pending ones included, so a restart keeps them.
   private func saveChoices() async {
-    let shown = shown
+    // What stands in for a choice never made is not saved as one.
+    let shown = shown(withStartChoices: false)
     saved = SessionChoices(model: shown.model ?? saved.model, thinking: shown.thinking ?? saved.thinking,
                            permission: shown.permission ?? saved.permission)
     try? await library.setSessionChoices(sessionID, model: shown.model, thinking: shown.thinking, permission: shown.permission)

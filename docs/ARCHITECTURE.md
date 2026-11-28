@@ -257,9 +257,10 @@ behind one adapter interface in the server and are treated alike:
   that need not. Creating a session replies once it is saved, and its
   runtime starts in the background. While a runtime starts for a new
   session or resumes for a message, a client that subscribes gets its
-  snapshot at once, with the saved choices and the options the runtime last
-  reported on its machine, and hears the runtime's own when it is in; a
-  message sent meanwhile goes once it has opened.
+  snapshot at once, with the saved choices (or, where none was made, what
+  the runtime last started a new session with on its machine) and the
+  options it last reported there, and hears the runtime's own when it is
+  in; a message sent meanwhile goes once it has opened.
 
 When the owning machine is unreachable, the session shows its saved items and
 sending is disabled.

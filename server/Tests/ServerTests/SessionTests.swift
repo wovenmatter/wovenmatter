@@ -119,6 +119,31 @@ func aNewSessionShowsItsSavedChoicesWhileItsRuntimeOpensAndItsOwnOnceItHas() asy
 }
 
 @Test(.timeLimit(.minutes(1)))
+func aNewSessionWithNoSavedChoicesShowsWhatItsRuntimeStartsWithBeforeItOpens() async throws {
+  // A first new session teaches this machine what the runtime starts with.
+  let store = StandInRuntime.NativeStore()
+  let first = try await TestServer.start(runtime: StandInRuntime(store: store))
+  let earlier = try await first.connect()
+  _ = try await earlier.call(CreateSession(runtime: StandInRuntime.kind, title: "First"))
+  try await waitUntil { store.started == 1 }
+  await first.server.stop()
+
+  // After a restart, the next one shows it while its runtime is still held.
+  let opening = StandInRuntime.Gate()
+  let second = try await TestServer.start(folder: first.folder, runtime: StandInRuntime(store: store, opening: opening))
+  defer { second.server.stopLater() }
+  let client = try await second.connect()
+  let session = try await client.call(CreateSession(runtime: StandInRuntime.kind, title: "Second"))
+  try await waitUntil { await opening.waiting == 1 }
+  let subscription = try await client.subscribe(SubscribeSession(sessionID: session.id))
+  #expect(subscription.reply.configuration.model == "stand-in")
+  // It stands in for a choice; none is saved.
+  #expect(session.model == nil)
+  #expect(try await second.server.library.session(session.id)?.model == nil)
+  await opening.open()
+}
+
+@Test(.timeLimit(.minutes(1)))
 func aChatOpensAtOnceWhileItsRuntimeResumesForAMessage() async throws {
   let store = StandInRuntime.NativeStore()
   let first = try await TestServer.start(runtime: StandInRuntime(store: store))
