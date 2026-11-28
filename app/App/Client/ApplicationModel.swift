@@ -127,8 +127,12 @@ final class ApplicationModel {
     /// Reads again only the areas whose tables changed.
     private func reload(_ tables: Set<String>) async {
         func any(_ names: String...) -> Bool { !tables.isDisjoint(with: names) }
-        if any("machines") { await machines.reload() }
-        if any("machines", "sessions", "folders", "session_items", "artifacts") { await workspace.refresh() }
+        // The machines and the folders and chats under them are read together.
+        let readsMachines = any("machines")
+        let readsWorkspace = any("machines", "sessions", "folders", "session_items", "artifacts")
+        async let machinesRead: Void = readsMachines ? machines.reload() : ()
+        async let workspaceRead: Void = readsWorkspace ? workspace.refresh() : ()
+        _ = await (machinesRead, workspaceRead)
         if any("artifacts", "artifact_versions") { await documents.reload() }
         if any("databases") { await databases.refresh() }
         if any("settings", "sealed_secrets") { await settings.reload() }

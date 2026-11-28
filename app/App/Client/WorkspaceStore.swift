@@ -157,9 +157,14 @@ final class WorkspaceStore {
     func refresh() async {
         guard let server else { return }
         do {
-            let folders = try await server.call(ListFolders())
+            // Asked together: the sidebar waits for the slowest of the three, not their sum.
+            async let listedFolders = server.call(ListFolders())
+            async let listedSessions = server.call(ListSessions())
+            async let listedNotes = try? server.call(ListArtifacts())
+            let folders = try await listedFolders
             // Bot chats and Forum rooms show only in the bots' own surfaces.
-            let sessions = try await server.call(ListSessions()).filter { $0.runtime != .bots }
+            let sessions = try await listedSessions.filter { $0.runtime != .bots }
+            let notes = await listedNotes
             workspaceOverview = WorkspaceOverview(
                 folders: folders.map { folder in
                     WorkspaceFolderRecord(id: folder.id, name: folder.name, icon: nil, position: folder.position,
@@ -167,7 +172,7 @@ final class WorkspaceStore {
                                           managedRoot: folder.managed, referencePaths: folder.references)
                 },
                 conversations: sessions.map(record),
-                notes: (try? await server.call(ListArtifacts()).map(Self.noteRecord)) ?? workspaceOverview?.notes ?? [])
+                notes: notes?.map(Self.noteRecord) ?? workspaceOverview?.notes ?? [])
         } catch {
             folderMutationError = error.localizedDescription
         }
