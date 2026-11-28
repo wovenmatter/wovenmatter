@@ -73,11 +73,18 @@ enum AssistantTurnDisplays {
   }
 
   private final class Session {
-    var turns = WorkTimelineGenerations<String, Entry>(limit: AssistantTurnDisplays.turnLimit)
+    var turns = WorkTimelineGenerations<String, Entry>(
+      limit: AssistantTurnDisplays.turnLimit, costLimit: AssistantTurnDisplays.sessionGenerationBytes)
   }
 
   /// A chat keeps at most twice this many turns.
   nonisolated static let turnLimit = 1_024
+  /// A chat's turns hold at most about twice this many bytes: tool output
+  /// can be large, and a chat let go must not stay in memory through it.
+  nonisolated static let sessionGenerationBytes = 16 * 1_024 * 1_024
+  /// All kept chats' turns hold about this many bytes at most, beyond the
+  /// chat shown last: the chats shown longest ago go first.
+  static let totalBytes = 64 * 1_024 * 1_024
   /// The chats whose turns are kept: those shown most recently.
   static let sessionLimit = 6
   private static var sessions: [String: Session] = [:]
@@ -91,16 +98,39 @@ enum AssistantTurnDisplays {
        WorkspaceRunActivityRecord.sameIgnoringWindow(entry.records, records) {
       // Compared with the copy at hand next time, which is quicker while it lasts.
       entry.records = records
-      if entry.content == content, entry.isStreaming == isStreaming { return entry.display }
+      // The same bytes, not only text that reads the same: the reply's file
+      // links name library entries by their exact bytes.
+      if WorkTimelineExactText(entry.content) == WorkTimelineExactText(content), entry.isStreaming == isStreaming {
+        return entry.display
+      }
       entry.display = AssistantTurnDisplay(messageID: messageID, content: content, isStreaming: isStreaming,
                                            records: records, earlier: entry.display)
       entry.content = content
       entry.isStreaming = isStreaming
+      session.turns.insert(messageID, entry, cost: cost(content: content, records: records))
+      trim(keeping: sessionID)
       return entry.display
     }
     let display = AssistantTurnDisplay(messageID: messageID, content: content, isStreaming: isStreaming, records: records)
-    session.turns.insert(messageID, Entry(content: content, isStreaming: isStreaming, records: records, display: display))
+    session.turns.insert(messageID, Entry(content: content, isStreaming: isStreaming, records: records, display: display),
+                         cost: cost(content: content, records: records))
+    trim(keeping: sessionID)
     return display
+  }
+
+  /// About how many bytes a kept turn holds: its records, and its reply's
+  /// text as the message, the display's body and the reply drawn hold it.
+  private static func cost(content: String, records: [WorkspaceRunActivityRecord]) -> Int {
+    1_024 + 3 * content.utf8.count + records.reduce(0) { $0 + 256 + $1.activity.workTimelineRetainedBytes }
+  }
+
+  /// Lets the chats shown longest ago go while all kept turns hold more than `totalBytes`.
+  private static func trim(keeping current: String) {
+    var total = sessions.values.reduce(0) { $0 + $1.turns.cost }
+    while total > totalBytes, let oldest = recent.first, oldest != current {
+      recent.removeFirst()
+      total -= sessions.removeValue(forKey: oldest)?.turns.cost ?? 0
+    }
   }
 
   private static func session(_ id: String) -> Session {

@@ -859,6 +859,11 @@ final class SessionStore {
             }
         }
         self.liveReplies = liveReplies
+        // Items let go of (a reconnect's newer items replacing what was shown) take their times with them.
+        if savedTimes.count > items.count {
+            let kept = Set(items.map(\.id))
+            savedTimes = savedTimes.filter { kept.contains($0.key) }
+        }
         if goneNotice != goneNoticeID { goneNoticeID = goneNotice }
         let older = !noOlderItems && (items.map(\.sequence).min() ?? 1) > 1
         if older != hasOlderMessages { hasOlderMessages = older }

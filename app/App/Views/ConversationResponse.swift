@@ -1937,17 +1937,19 @@ struct ConversationUserBubble<Attachments: View>: View {
 /// the bubble asks for them on every pass.
 @MainActor
 enum ConversationUserBubbleMeasure {
+    /// Keyed by the text's exact bytes: two spellings that read the same can lay out differently.
     private struct Lines: Hashable {
-        let content: String
+        let content: WorkTimelineExactText
         let width: CGFloat
     }
 
-    private static var widths = WorkTimelineGenerations<String, CGFloat>(limit: 512)
-    private static var lines = WorkTimelineGenerations<Lines, Int>(limit: 512)
+    private static var widths = WorkTimelineGenerations<WorkTimelineExactText, CGFloat>(
+        limit: 512, costLimit: 4 * 1_024 * 1_024)
+    private static var lines = WorkTimelineGenerations<Lines, Int>(limit: 512, costLimit: 4 * 1_024 * 1_024)
 
     /// How many lines the message takes at `width`.
     static func lineCount(_ content: String, width: CGFloat) -> Int {
-        let key = Lines(content: content, width: width)
+        let key = Lines(content: WorkTimelineExactText(content), width: width)
         if let kept = lines.value(key) { return kept }
         let font = ResponseFont.systemFont(ofSize: 15)
         let spacing = ConversationMetrics.Prose.lineSpacing
@@ -1958,18 +1960,19 @@ enum ConversationUserBubbleMeasure {
             options: [.usesLineFragmentOrigin], attributes: [.font: font, .paragraphStyle: style]).height
         let line = NSLayoutManager().defaultLineHeight(for: font)
         let count = Int(((height + spacing) / (line + spacing)).rounded())
-        lines.insert(key, count)
+        lines.insert(key, count, cost: content.utf8.count)
         return count
     }
 
     /// The width of the message's longest line, within the bubble's limit.
     static func naturalWidth(_ content: String) -> CGFloat {
-        if let kept = widths.value(content) { return kept }
+        let key = WorkTimelineExactText(content)
+        if let kept = widths.value(key) { return kept }
         let font = ResponseFont.systemFont(ofSize: 15)
         let longestLine = content.split(separator: "\n", omittingEmptySubsequences: false)
             .map { ($0 as NSString).size(withAttributes: [.font: font]).width }.max() ?? 0
         let width = min(586, max(1, ceil(longestLine)))
-        widths.insert(content, width)
+        widths.insert(key, width, cost: content.utf8.count)
         return width
     }
 

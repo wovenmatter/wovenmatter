@@ -11,14 +11,17 @@ struct ConversationFileRow {
     let resolveFile: (String) async throws -> URL
 
     static func files(in content: String) -> [LibraryAsset] {
-        // Found once for each text: the reply asks on every pass.
-        if let kept = found.value(content) { return kept }
+        // Found once for each text: the reply asks on every pass. Keyed by
+        // the exact bytes, which a library entry's identity is made from.
+        let key = WorkTimelineExactText(content)
+        if let kept = found.value(key) { return kept }
         let files = LibraryLinkDiscovery.links(in: content).filter { LibraryFileReference.path($0.source) != nil }
-        found.insert(content, files)
+        found.insert(key, files, cost: content.utf8.count)
         return files
     }
 
-    private static var found = WorkTimelineGenerations<String, [LibraryAsset]>(limit: 512)
+    private static var found = WorkTimelineGenerations<WorkTimelineExactText, [LibraryAsset]>(
+        limit: 512, costLimit: 4 * 1_024 * 1_024)
 
     /// One chip per file, each with its own actions. A link in the reply's
     /// text to a file opens the first chip for that file's path.

@@ -1464,8 +1464,14 @@ private final class WorkTimelineMemo: @unchecked Sendable {
   }
 
   private let lock = NSLock()
-  private var inputs = WorkTimelineGenerations<String, (raw: String, value: [String: Any]?)>(limit: 4_096)
-  private var derived = WorkTimelineGenerations<String, Derived>(limit: 4_096)
+  /// A generation of inputs or worked-out values holds at most this many
+  /// bytes of the activities it keeps: tool output can be large, and a chat
+  /// let go must not stay in memory through them.
+  private static let generationBytes = 16 * 1_024 * 1_024
+  private var inputs = WorkTimelineGenerations<String, (raw: String, value: [String: Any]?)>(
+    limit: 4_096, costLimit: WorkTimelineMemo.generationBytes)
+  private var derived = WorkTimelineGenerations<String, Derived>(
+    limit: 4_096, costLimit: WorkTimelineMemo.generationBytes)
   /// Small, and promised never to change for a run once shown.
   private var anchors = WorkTimelineGenerations<String, String?>(limit: 16_384)
 
@@ -1478,7 +1484,8 @@ private final class WorkTimelineMemo: @unchecked Sendable {
     lock.unlock()
     let value = (try? JSONSerialization.jsonObject(with: Data(raw.utf8))) as? [String: Any]
     lock.lock()
-    inputs.insert(id, (raw, value))
+    // The text, and the decoded objects that are a few times its size.
+    inputs.insert(id, (raw, value), cost: 256 + 4 * raw.utf8.count)
     lock.unlock()
     return value
   }
@@ -1497,7 +1504,7 @@ private final class WorkTimelineMemo: @unchecked Sendable {
       entry = kept
     } else {
       entry = Derived(activity)
-      derived.insert(activity.id, entry)
+      derived.insert(activity.id, entry, cost: activity.workTimelineRetainedBytes)
     }
     if let value = entry[keyPath: field] {
       lock.unlock()
@@ -1528,29 +1535,87 @@ private final class WorkTimelineMemo: @unchecked Sendable {
   }
 }
 
-/// Values kept in two generations: when the newer is full it becomes the
-/// older and the older is let go, and a value read from the older moves to
-/// the newer. What is still in use stays; what is not goes, without a point
-/// at which everything is forgotten at once.
+/// Values kept in two generations: when the newer is full, by its count or
+/// by the bytes its values hold, it becomes the older and the older is let
+/// go, and a value read from the older moves to the newer. What is still in
+/// use stays; what is not goes, without a point at which everything is
+/// forgotten at once, and the two never hold much more than twice a
+/// generation's bytes.
 struct WorkTimelineGenerations<Key: Hashable, Value> {
   let limit: Int
-  private var newer: [Key: Value] = [:]
-  private var older: [Key: Value] = [:]
+  /// The bytes a generation holds before it is full (as each value's
+  /// `cost` estimates them).
+  let costLimit: Int
+  private var newer: [Key: (value: Value, cost: Int)] = [:]
+  private var older: [Key: (value: Value, cost: Int)] = [:]
+  private var newerCost = 0
+  private var olderCost = 0
 
-  init(limit: Int) { self.limit = limit }
-
-  mutating func value(_ key: Key) -> Value? {
-    if let value = newer[key] { return value }
-    guard let value = older.removeValue(forKey: key) else { return nil }
-    insert(key, value)
-    return value
+  init(limit: Int, costLimit: Int = .max) {
+    self.limit = limit
+    self.costLimit = costLimit
   }
 
-  mutating func insert(_ key: Key, _ value: Value) {
-    if newer[key] == nil, newer.count >= limit {
+  /// The bytes both generations hold, as estimated.
+  var cost: Int { newerCost + olderCost }
+
+  mutating func value(_ key: Key) -> Value? {
+    if let kept = newer[key] { return kept.value }
+    guard let kept = older.removeValue(forKey: key) else { return nil }
+    olderCost -= kept.cost
+    insert(key, kept.value, cost: kept.cost)
+    return kept.value
+  }
+
+  /// Keeps `value`, which holds about `cost` bytes, in place of any value kept for `key`.
+  mutating func insert(_ key: Key, _ value: Value, cost: Int = 0) {
+    if let stale = older.removeValue(forKey: key) { olderCost -= stale.cost }
+    if let replaced = newer.removeValue(forKey: key) {
+      newerCost -= replaced.cost
+    } else if !newer.isEmpty, newer.count >= limit || newerCost + cost > costLimit {
       older = newer
+      olderCost = newerCost
       newer = [:]
+      newerCost = 0
     }
-    newer[key] = value
+    newer[key] = (value, cost)
+    newerCost += cost
+  }
+}
+
+/// Text compared and hashed by its exact UTF-8 bytes. `String` equality is
+/// canonical equivalence ("é" equals "e" and a combining acute), which a key
+/// must not use when what is kept for it depends on the bytes.
+struct WorkTimelineExactText: Hashable {
+  let text: String
+
+  init(_ text: String) { self.text = text }
+
+  static func == (lhs: Self, rhs: Self) -> Bool {
+    lhs.text.utf8.count == rhs.text.utf8.count && lhs.text.utf8.elementsEqual(rhs.text.utf8)
+  }
+
+  func hash(into hasher: inout Hasher) {
+    hasher.combine(text.utf8.count)
+    if text.utf8.withContiguousStorageIfAvailable({ hasher.combine(bytes: UnsafeRawBufferPointer($0)) }) == nil {
+      for byte in text.utf8 { hasher.combine(byte) }
+    }
+  }
+}
+
+extension AgentRunActivity {
+  /// About how many bytes a kept copy of the activity holds: its texts, raw
+  /// payloads, file changes and subagents' words.
+  var workTimelineRetainedBytes: Int {
+    let texts = [title, detail, status, toolName, content, rawInputJSON, rawOutputJSON, rawPayloadJSON]
+      .reduce(0) { $0 + ($1?.utf8.count ?? 0) }
+    let changed = changes.reduce(0) { total, change in
+      total + change.path.utf8.count + (change.oldText?.utf8.count ?? 0) + change.newText.utf8.count
+        + (change.unifiedDiff?.utf8.count ?? 0)
+    }
+    let delegated = (subagents ?? []).reduce(0) { total, child in
+      total + [child.task, child.result, child.detail].reduce(0) { $0 + ($1?.utf8.count ?? 0) }
+    }
+    return 512 + texts + changed + delegated
   }
 }

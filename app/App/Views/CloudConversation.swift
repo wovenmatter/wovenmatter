@@ -333,6 +333,13 @@ struct CloudConversation: View {
                 .padding(.bottom, ConversationBottomOverlayLayout.bottomOffset)
         }
         .background(theme.palette.workspace)
+        // The row actions hold this view, whose state holds them: let them go
+        // while it is not shown, and set them again when it shows.
+        .onAppear {
+            rowActions.reinstate()
+            _ = refreshedRowActions()
+        }
+        .onDisappear { rowActions.retire() }
         .environment(\.conversationCopyScope, copyScope)
         .environment(\.conversationTranscriptState, session?.transcriptState)
         .environment(\.conversationFolder, sessionFolder)
@@ -369,9 +376,11 @@ struct CloudConversation: View {
         .equatable()
     }
 
-    /// `rowActions`, set to act for the chat as it is in this pass.
+    /// `rowActions`, set to act for the chat as it is in this pass, unless
+    /// the view is not shown.
     private func refreshedRowActions() -> ConversationRowActions {
         let actions = rowActions
+        guard !actions.isRetired else { return actions }
         actions.openAttachment = { attachment in openAttachment(attachment) }
         actions.resolveFile = { libraryItemID, source in
             try await model.library.fileURL(id: WorkspaceLibraryItem.identifier(messageID: libraryItemID, source: source))
@@ -944,6 +953,8 @@ func nonemptyString(_ value: String?) -> String? {
 /// chat view's life, so rows compare equal from pass to pass; the chat sets
 /// its actions again on every pass, so each acts for the chat as it is then.
 /// Rows pass what is theirs (the item a file belongs to) as arguments.
+/// The actions hold the chat view, whose state holds this object, so they
+/// are let go while the view is not shown (`retire`).
 @MainActor
 final class ConversationRowActions {
     var openAttachment: (SessionMessageAttachment) -> Void = { _ in }
@@ -952,6 +963,19 @@ final class ConversationRowActions {
     var newSession: () -> Void = {}
     var transcriptInteraction: @MainActor () -> Void = {}
     var activityDetails: @MainActor (_ runID: String, _ activityID: String) async throws -> AgentRunActivity? = { _, _ in nil }
+    /// The view is not shown: its actions are let go, and none are set until it shows again.
+    private(set) var isRetired = false
+
+    func retire() {
+        isRetired = true
+        openAttachment = { _ in }
+        resolveFile = { _, _ in throw CancellationError() }
+        newSession = {}
+        transcriptInteraction = {}
+        activityDetails = { _, _ in nil }
+    }
+
+    func reinstate() { isRetired = false }
 
     /// The two the transcript's environment carries, each made once, so the
     /// views reading them see the same closure on every pass.
@@ -1315,8 +1339,6 @@ private struct ConversationVisualReplyCopyButton: View {
     private static weak var keyWindow: NSWindow?
     private static var monitor: Any?
     private static var users = 0
-    /// Where the views `wheelScrollViews` holds were found under the pointer.
-    private static var lastHit: (window: ObjectIdentifier, location: NSPoint)?
 
     /// A wheel or the pointer over this transcript, or a navigation key in its
     /// window while it is the active panel, within the last half second; or
@@ -1339,8 +1361,6 @@ private struct ConversationVisualReplyCopyButton: View {
         }
         wheelScrollViews = scrollViews
         lastWheel = Date()
-        // Found for no pointer location the monitor knows (the monitor sets its own).
-        lastHit = nil
     }
 
     /// Watches the app's own wheel and navigation-key events while any
@@ -1354,18 +1374,10 @@ private struct ConversationVisualReplyCopyButton: View {
         monitor = NSEvent.addLocalMonitorForEvents(matching: [.scrollWheel, .keyDown, .leftMouseDown, .leftMouseDragged]) { event in
             // A drag on the scroller, or one selecting text past the edge, scrolls
             // too; one resizing the window does not.
-            if event.type != .keyDown, let window = event.window, let content = window.contentView, !window.inLiveResize {
-                // Within one trackpad scroll the pointer stays where it was,
-                // over the same scroll views: those found for it still hold.
-                let continuing = event.type == .scrollWheel && (event.phase == .changed || event.momentumPhase == .changed)
-                if continuing, let lastHit, lastHit.window == ObjectIdentifier(window), lastHit.location == event.locationInWindow {
-                    lastWheel = Date()
-                } else {
-                    // `hitTest` takes a point in the receiver's superview's coordinates.
-                    let point = content.superview?.convert(event.locationInWindow, from: nil) ?? event.locationInWindow
-                    noteWheel(over: content.hitTest(point))
-                    lastHit = (ObjectIdentifier(window), event.locationInWindow)
-                }
+            if event.type != .keyDown, let content = event.window?.contentView, event.window?.inLiveResize != true {
+                // `hitTest` takes a point in the receiver's superview's coordinates.
+                let point = content.superview?.convert(event.locationInWindow, from: nil) ?? event.locationInWindow
+                noteWheel(over: content.hitTest(point))
             } else if event.type == .keyDown, keys.contains(event.keyCode), let window = NSApp.keyWindow,
                       (window.firstResponder as? NSText)?.isEditable != true {
                 keyWindow = window
